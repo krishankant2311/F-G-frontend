@@ -1,0 +1,7 @@
+.scrollbar-content {
+  scrollbar-width: none; /* For Firefox */
+}
+
+.scrollbar-content::-webkit-scrollbar {
+  display: none; /* For Chrome, Safari, and Edge */
+}

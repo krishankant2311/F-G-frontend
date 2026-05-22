@@ -1,0 +1,29 @@
+/* Example CSS overrides for react-select-search */
+.select-search {
+    font-family: Arial, sans-serif;
+  }
+  
+  .select-search__value {
+    padding: 10px;
+    border: 1px solid #d1d1d1;
+    border-radius: 5px;
+    outline: none;
+    width: 100%;
+  }
+  
+  .select-search__options {
+    margin-top: 5px;
+    border: 1px solid #d1d1d1;
+    border-radius: 5px;
+    background: #fff;
+  }
+  
+  .select-search__option {
+    padding: 10px;
+    cursor: pointer;
+  }
+  
+  .select-search__option--is-highlighted {
+    background: #f0f0f0;
+  }
+  

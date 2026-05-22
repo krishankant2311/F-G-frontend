@@ -1,0 +1,15 @@
+/* Sidebar.css */
+
+.nav-treeview {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s ease;
+}
+
+.slide-in {
+  max-height: 1000px; /* Adjust max-height to a sufficiently large value */
+}
+
+.slide-out {
+  max-height: 0;
+}
