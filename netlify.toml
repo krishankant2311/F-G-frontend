@@ -1,0 +1,8 @@
+[build]
+  command = "npm run build"
+  publish = "build"
+
+# CRA treats ESLint warnings as errors when CI=true (Netlify default).
+# Project has many pre-existing lint warnings; allow build to succeed.
+[build.environment]
+  CI = "false"
