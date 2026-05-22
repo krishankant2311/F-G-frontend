@@ -1629,7 +1629,7 @@ export default function AddFieldCopyForm() {
                             className="border-b border-[grey] outline-none"
                             id={`totalCost-${index}`}
                             name="totalCost"
-                            placeholder="Total cost goes here ..."
+                            placeholder="Enter Cost"
                             onChange={(e) => handleInputChange(e, index)}
                             value={formData.cost}
                             min={0}
