@@ -127,6 +127,14 @@ export function toPersistedCopy(form) {
   return rest;
 }
 
+/** Empty Cost input for Other rows so placeholder "Enter Cost" is visible (not 0). */
+export function otherFieldCopyCostDisplayValue(cost) {
+  if (cost === "" || cost === null || cost === undefined) return "";
+  const n = parseFloat(cost);
+  if (Number.isNaN(n) || n === 0) return "";
+  return cost;
+}
+
 /** Shown in Description / material name fields (no vendor suffix while typing). */
 export function getMaterialNameInputValue(form) {
   if (!form) return "";

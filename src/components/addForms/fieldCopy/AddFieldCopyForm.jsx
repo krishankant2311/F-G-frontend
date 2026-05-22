@@ -13,6 +13,7 @@ import {
   applyReferenceVendorToForm,
   ensureFgCostFromPrice,
   getMaterialNameInputValue,
+  otherFieldCopyCostDisplayValue,
   recalcOtherFieldCopyLine,
   toPersistedCopy,
 } from "../../../utils/materialReference";
@@ -211,8 +212,12 @@ export default function AddFieldCopyForm() {
             ? fgDefaultMarkup
             : updatedForms[index].markUp ?? updatedForms[index].markup ?? 0,
         totalPrice: "",
+        totalCost: "",
         isTaxable: true,
       };
+      if (value === "Other") {
+        updatedForms[index] = recalcOtherFieldCopyLine(updatedForms[index]);
+      }
     }
 
     if (name === "type") {
@@ -243,9 +248,13 @@ export default function AddFieldCopyForm() {
       updatedForm.markUp = normalized;
     }
 
-    // Ensure cost field is preserved as number when it's being set
-    if (name === "cost") {
-      updatedForm.cost = parseFloat(value) || 0;
+    if (name === "cost" || name === "totalCost") {
+      if (updatedForm.source === "Other") {
+        updatedForm.cost =
+          value === "" ? "" : parseFloat(value) || 0;
+      } else if (name === "cost") {
+        updatedForm.cost = parseFloat(value) || 0;
+      }
     }
 
     // if(name === "vendorName"){
@@ -1621,20 +1630,20 @@ export default function AddFieldCopyForm() {
                     {formData.source === "Other" && (
                       <>
                         <div className="form-group flex flex-col">
-                          <label htmlFor={`totalCost-${index}`}>
+                          <label htmlFor={`cost-other-${index}`}>
                             Cost *
                           </label>
                           <input
-                            type="number"
-                            className="border-b border-[grey] outline-none"
-                            id={`totalCost-${index}`}
-                            name="totalCost"
+                            type="text"
+                            className="border-b border-[grey] outline-none bg-gray-50"
+                            id={`cost-other-${index}`}
+                            key={`cost-other-${index}-${formData.source}`}
+                            name="cost"
                             placeholder="Enter Cost"
                             onChange={(e) => handleInputChange(e, index)}
-                            value={formData.cost}
-                            min={0}
-                            required
+                            value={otherFieldCopyCostDisplayValue(formData.cost)}
                             readOnly
+                            required
                           />
                         </div>
                         <div className="form-group flex flex-col">
