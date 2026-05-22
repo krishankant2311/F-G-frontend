@@ -66,8 +66,8 @@ storybook-static/
 # Yarn Integrity
 .yarn-integrity
 node_modules
-dist
-build
+# Only ignore root /dist (not public/dist — AdminLTE CSS for login UI)
+/dist
 *.zip
 .zip
 text
