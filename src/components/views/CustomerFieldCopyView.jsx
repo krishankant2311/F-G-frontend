@@ -8,7 +8,10 @@ import { useTableContext } from "../../context/TableContext";
 import html2pdf from "html2pdf.js";
 import fng_logo from "../../assets/images/fng_logo_black.png";
 import parse from "html-react-parser";
-import { materialNameBaseForEdit } from "../../utils/materialReference";
+import {
+  finalizeLaborSummaryRow,
+  materialNameBaseForEdit,
+} from "../../utils/materialReference";
 
 export default function CustomerFieldCopyView() {
   const [formData, setFormData] = useState({
@@ -471,6 +474,16 @@ Approved by: __________________  Date: ____________________`,
   }
 
   const getPdfItemDisplayFields = (item) => {
+    if (item?.source === "Labor") {
+      const row = finalizeLaborSummaryRow(item);
+      return {
+        qty: row.quantity,
+        unitCostVal: Number(row.cost) || 0,
+        displayPrice: Number(row.price) || 0,
+        markupVal: row.markup ?? row.markUp ?? null,
+        totalVal: Number(row.totalPrice) || 0,
+      };
+    }
     const refUpper = String(item?.reference || "").toUpperCase();
     const isLaborItem = refUpper.includes("LABOR");
     const isContractorLabor =
@@ -823,7 +836,7 @@ Approved by: __________________  Date: ____________________`,
 
     return Object.values(summary).map((row) => {
       if (row.source === "Labor") {
-        return row;
+        return finalizeLaborSummaryRow(row);
       }
       const qty = num(row.quantity);
       const unitPrice = num(row.price);

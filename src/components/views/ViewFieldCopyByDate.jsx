@@ -9,6 +9,14 @@ import html2pdf from "html2pdf.js";
 import parse from "html-react-parser";
 import fng_logo from "../../assets/images/fng_logo_black.png";
 import JoditEditor from "jodit-react";
+import {
+  formatFieldCopyAmount,
+  getFieldCopyLineDisplayCost,
+  getFieldCopyLineDisplayPrice,
+  getLaborPdfDescription,
+  shouldSkipAggregatedLaborPdfRow,
+} from "../../utils/fieldCopyLaborDisplay";
+import { finalizeLaborSummaryRow } from "../../utils/materialReference";
 
 export default function ViewFieldCopyByDate() {
   const { tableSize } = useTableContext();
@@ -463,6 +471,10 @@ export default function ViewFieldCopyByDate() {
               ...fieldLabors,
               {
                 jobType: item.jobType,
+                reference: item.reference,
+                description: item.description,
+                type: item.type,
+                source: "Labor",
                 totalPrice: item.totalPrice,
                 isLaborTaxable: item.isTaxable,
               },
@@ -572,6 +584,9 @@ export default function ViewFieldCopyByDate() {
         // Initialize a new entry for this jobType and tax status combination
         result[key] = {
           jobType: item.jobType,
+          reference: item.reference,
+          description: item.description,
+          source: item.source,
           totalPrice: 0,
           isLaborTaxable: item.isLaborTaxable,
           dataType: "Labor", // Ensure dataType is set
@@ -673,7 +688,9 @@ export default function ViewFieldCopyByDate() {
       }
     });
 
-    return Object.values(summary);
+    return Object.values(summary).map((row) =>
+      row.source === "Labor" ? finalizeLaborSummaryRow(row) : row
+    );
   };
   function convertMillisecondsToDate(ms) {
     ms = Number.parseInt(ms);
@@ -1208,11 +1225,21 @@ const handleInvoiceJobType = (jobType) => {
                         {group &&
                           group.items &&
                           group.items.length > 0 &&
-                          group.items.map((item, idx) => (
+                          group.items.map((item, idx) => {
+                            const lineCost = getFieldCopyLineDisplayCost(item);
+                            const displayPrice = getFieldCopyLineDisplayPrice(item);
+                            const markupVal = item?.markup ?? item?.markUp ?? null;
+                            return (
                             <tr key={idx}>
                               {/* <td className="text-xs">{item?.source}</td> */}
                               <td className="text-xs pr-2">
-                                {item?.reference?.toUpperCase()}
+                                {item?.source === "Labor"
+                                  ? getLaborPdfDescription({
+                                      labor: item,
+                                      groupItems: group?.items,
+                                      fieldCopies,
+                                    })?.toUpperCase()
+                                  : item?.reference?.toUpperCase()}
                               </td>
                               <td className="text-xs">
                                 {item?.vendorName?.toUpperCase()}
@@ -1222,36 +1249,22 @@ const handleInvoiceJobType = (jobType) => {
                                 {item?.quantity ? item.quantity : ""}
                               </td>
                               <td className="text-xs">
-                                {/* Cost = cost × quantity (Office Copy jaisa - sirf item.cost se) */}
-                                {(() => {
-                                  if (item?.cost == null || item?.cost === "" || Number(item?.cost) <= 0) return "";
-                                  const qty = Number(item?.quantity || 1);
-                                  const lineCost = Number(item.cost) * qty;
-                                  return lineCost.toLocaleString("en-US", {
-                                    minimumFractionDigits: 2,
-                                    maximumFractionDigits: 2,
-                                  });
-                                })()}
+                                {lineCost > 0 ? formatFieldCopyAmount(lineCost) : ""}
                               </td>
                               <td className="text-xs">
-                                {/* Markup = DB se percentage (e.g. 20%) */}
-                                {(() => {
-                                  const markupVal = item?.markup ?? item?.markUp ?? null;
-                                  if (markupVal === null || markupVal === undefined || markupVal === "") return "";
-                                  return Number(markupVal).toLocaleString("en-US", {
-                                    minimumFractionDigits: 0,
-                                    maximumFractionDigits: 2,
-                                  }) + "%";
-                                })()}
+                                {markupVal !== null &&
+                                markupVal !== undefined &&
+                                markupVal !== ""
+                                  ? Number(markupVal).toLocaleString("en-US", {
+                                      minimumFractionDigits: 0,
+                                      maximumFractionDigits: 2,
+                                    }) + "%"
+                                  : ""}
                               </td>
                               <td className="text-xs">
-                                {item?.price && <b>$</b>}
-                                <span className="ml-4">
-                                  {item?.price?.toLocaleString("en-US", {
-                                    minimumFractionDigits: 2,
-                                    maximumFractionDigits: 2,
-                                  })}
-                                </span>
+                                {displayPrice != null && displayPrice > 0
+                                  ? formatFieldCopyAmount(displayPrice)
+                                  : ""}
                               </td>
                               <td className="text-xs text-end">
                                 <b>$</b>
@@ -1264,7 +1277,8 @@ const handleInvoiceJobType = (jobType) => {
                                 </span>
                               </td>
                             </tr>
-                          ))}
+                          );
+                          })}
                         {/* <tr>
                                 <td colSpan="3" className="font-bold">
                                 </td>
@@ -1332,11 +1346,26 @@ const handleInvoiceJobType = (jobType) => {
                 <tbody>
                   {laborData
                     .filter((labor) => labor.totalPrice !== 0)
+                    .filter(
+                      (labor) =>
+                        !shouldSkipAggregatedLaborPdfRow(
+                          labor,
+                          categorizedFieldCopies?.[0]?.items,
+                          fieldCopies
+                        )
+                    )
                     .map((labor) => {
                       return (
                         <tr className="">
                           <td className="">
-                            <p>{String(labor?.jobType || "").toUpperCase()} LABOR</p>
+                            <p>
+                              {getLaborPdfDescription({
+                                labor,
+                                groupItems:
+                                  categorizedFieldCopies?.[0]?.items,
+                                fieldCopies,
+                              })?.toUpperCase()}
+                            </p>
                           </td>
                           <td className="text-xs text-end">
                             <b>$</b>
@@ -1368,12 +1397,16 @@ const handleInvoiceJobType = (jobType) => {
                     <div className="flex justify-between mt-1 capitalize">
                       <span>
                         <b className="w-[200px] inline-block">
-                          {typeof item?.jobType === "string"
-                            ? item.jobType.toUpperCase()
-                            : String(item?.jobType || "").toUpperCase()}{" "}
                           {item.source === "Labor"
-                            ? "LABOR"
-                            : handleInvoiceJobType(item.jobType)}
+                            ? getLaborPdfDescription({
+                                labor: item,
+                                groupItems:
+                                  categorizedFieldCopies?.[0]?.items,
+                                fieldCopies,
+                              })?.toUpperCase()
+                            : `${typeof item?.jobType === "string"
+                                ? item.jobType.toUpperCase()
+                                : String(item?.jobType || "").toUpperCase()} ${handleInvoiceJobType(item.jobType)}`.trim()}
                         </b>
                         <b>
                           {formData?.customerType === "Normal"
@@ -1402,14 +1435,24 @@ const handleInvoiceJobType = (jobType) => {
                     </div>
                   );
                 } else {
-                  if (item.totalPrice > 0) {
+                  if (
+                    item.totalPrice > 0 &&
+                    !shouldSkipAggregatedLaborPdfRow(
+                      item,
+                      categorizedFieldCopies?.[0]?.items,
+                      fieldCopies
+                    )
+                  ) {
                     return (
                       <div className="flex justify-between mt-1">
                         <span>
                           <b className="w-[200px] inline-block">
-                            {typeof item?.jobType === "string"
-                              ? item.jobType.toUpperCase()
-                              : String(item?.jobType || "").toUpperCase()} LABOR
+                            {getLaborPdfDescription({
+                              labor: item,
+                              groupItems:
+                                categorizedFieldCopies?.[0]?.items,
+                              fieldCopies,
+                            })?.toUpperCase()}
                           </b>
                           <b>
                             {formData?.customerType === "Normal"

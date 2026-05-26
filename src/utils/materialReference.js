@@ -107,6 +107,72 @@ export function hydrateOtherFieldCopyFromApi(form) {
   return f;
 }
 
+/**
+ * Field Copy line with source "Labor":
+ * - Unit sell (PRICE) = unit cost × (1 + markup%).
+ * - Line TOTAL = unit sell × qty × (1 + markup%) — markup applies on sell total too.
+ *   Example: cost 100, markup 100%, qty 1 → price 200, total 400.
+ */
+export function recalcLaborFieldCopyLine(form) {
+  if (!form || form.source !== "Labor") return { ...form };
+  const f = { ...form };
+  const qty = parseFloat(f.quantity);
+  const qtySafe = Number.isFinite(qty) && qty > 0 ? qty : 1;
+  const markupPct = parseFloat(f.markup ?? f.markUp) || 0;
+  const unitCost = parseFloat(f.cost) || 0;
+  const explicitPrice = parseFloat(f.price);
+  const unitSell =
+    explicitPrice > 0
+      ? explicitPrice
+      : unitCost > 0
+        ? Math.round(unitCost * (1 + markupPct / 100) * 10000) / 10000
+        : 0;
+  if (unitSell > 0) f.price = unitSell;
+  f.markup = markupPct;
+  f.markUp = markupPct;
+  f.totalCost = Math.round(unitCost * qtySafe * 100) / 100;
+  if (unitSell > 0) {
+    f.totalPrice =
+      Math.round(unitSell * qtySafe * (1 + markupPct / 100) * 100) / 100;
+  } else {
+    f.totalPrice = "";
+  }
+  return f;
+}
+
+/** Summarized Labor row (`cost` may be line-total from merge). */
+export function finalizeLaborSummaryRow(row) {
+  if (!row || row.source !== "Labor") return row;
+  const qty = parseFloat(row.quantity);
+  const qtySafe = Number.isFinite(qty) && qty > 0 ? qty : 1;
+  const markupPct = parseFloat(row.markup ?? row.markUp) || 0;
+  const lineCostTotal = parseFloat(row.cost) || 0;
+  const unitCost =
+    lineCostTotal > 0 && qtySafe > 0
+      ? lineCostTotal / qtySafe
+      : parseFloat(row.cost) || 0;
+  const explicitPrice = parseFloat(row.price);
+  const unitSell =
+    explicitPrice > 0
+      ? explicitPrice
+      : unitCost > 0
+        ? Math.round(unitCost * (1 + markupPct / 100) * 10000) / 10000
+        : 0;
+  const totalPrice =
+    unitSell > 0
+      ? Math.round(unitSell * qtySafe * (1 + markupPct / 100) * 100) / 100
+      : parseFloat(row.totalPrice) || 0;
+  return {
+    ...row,
+    quantity: qtySafe,
+    cost: unitCost,
+    price: unitSell,
+    totalPrice,
+    markup: markupPct,
+    markUp: markupPct,
+  };
+}
+
 /** API payload: sync reference, drop referenceBase. */
 export function toPersistedCopy(form) {
   const synced = applyReferenceVendorToForm({ ...form });
@@ -123,6 +189,11 @@ export function toPersistedCopy(form) {
       cost: unitCost,
       price: unitSell,
     };
+  }
+  if (rest.source === "Labor") {
+    const synced = recalcLaborFieldCopyLine(rest);
+    const { unitSellPrice: _drop, ...base } = synced;
+    return base;
   }
   return rest;
 }

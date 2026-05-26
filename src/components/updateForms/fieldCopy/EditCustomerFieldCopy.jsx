@@ -12,6 +12,7 @@ import {
   getMaterialNameInputValue,
   hydrateOtherFieldCopyFromApi,
   materialNameBaseForEdit,
+  recalcLaborFieldCopyLine,
   recalcOtherFieldCopyLine,
   toPersistedCopy,
 } from "../../../utils/materialReference";
@@ -623,14 +624,11 @@ export default function EditCustomerFieldCopy() {
     //   }
     // }
 
-    // ✅ AUTO CALCULATION FOR LUMP SUM & LABOR
-    if (
-      updatedForm.source === "Lump Sum" ||
-      updatedForm.source === "Labor"
-    ) {
+    if (updatedForm.source === "Labor") {
+      Object.assign(updatedForm, recalcLaborFieldCopyLine(updatedForm));
+    } else if (updatedForm.source === "Lump Sum") {
       const cost = parseFloat(updatedForm.cost) || 0;
       const markupPercent = parseFloat(updatedForm.markUp) || 0;
-
       updatedForm.totalCost = cost;
       updatedForm.totalPrice = cost + (cost * markupPercent) / 100;
     }
@@ -688,6 +686,8 @@ export default function EditCustomerFieldCopy() {
           updatedForm,
           recalcOtherFieldCopyLine(updatedForm)
         );
+      } else if (updatedForm.source === "Labor") {
+        Object.assign(updatedForm, recalcLaborFieldCopyLine(updatedForm));
       } else if (false) {
         const intermediatePrice =
           updatedForm.totalCost + (markupVal * updatedForm.totalCost) / 100;

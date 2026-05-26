@@ -8,6 +8,12 @@ import { useTableContext } from "../../context/TableContext";
 import html2pdf from "html2pdf.js";
 import fng_logo from "../../assets/images/fng_logo_black.png";
 import parse from "html-react-parser";
+import {
+  getFieldCopyLineDisplayPrice,
+  getLaborPdfDescription,
+  shouldSkipAggregatedLaborPdfRow,
+} from "../../utils/fieldCopyLaborDisplay";
+import { finalizeLaborSummaryRow } from "../../utils/materialReference";
 
 export default function OfficeFieldCopyBidView() {
   const [formData, setFormData] = useState({
@@ -463,6 +469,10 @@ export default function OfficeFieldCopyBidView() {
               ...fieldLabors,
               {
                 jobType: item.jobType,
+                reference: item.reference,
+                description: item.description,
+                type: item.type,
+                source: "Labor",
                 size: item?.measure || item?.size || "",
                 totalPrice: item.totalPrice,
                 totalCost:
@@ -580,6 +590,9 @@ export default function OfficeFieldCopyBidView() {
         // Initialize a new entry for this jobType and tax status combination
         result[key] = {
           jobType: item.jobType,
+          reference: item.reference,
+          description: item.description,
+          source: item.source,
           size: item?.size || item?.measure || "",
           totalPrice: 0,
           totalCost: 0,
@@ -710,6 +723,9 @@ export default function OfficeFieldCopyBidView() {
               ...fieldLabors,
               {
                 jobType: item.jobType,
+                reference: item.reference,
+                description: item.description,
+                source: "Labor",
                 totalPrice: item.totalPrice,
                 isLaborTaxable: item.isTaxable,
                 type: "field",
@@ -982,7 +998,9 @@ export default function OfficeFieldCopyBidView() {
     //   summary[key].totalPrice = summary[key].quantity * summary[key].price;
     // });
 
-    return Object.values(summary);
+    return Object.values(summary).map((row) =>
+      row.source === "Labor" ? finalizeLaborSummaryRow(row) : row
+    );
   };
 
   const saveDocumentAs = () => {
@@ -1444,8 +1462,7 @@ export default function OfficeFieldCopyBidView() {
                                       ? Number(item.totalPrice)
                                       : null;
                                   const displayPrice =
-                                    priceVal ??
-                                    (qty > 0 && totalVal != null ? totalVal / qty : null);
+                                    getFieldCopyLineDisplayPrice(item);
 
                                   const lineCost =
                                     item?.totalCost != null &&
@@ -1504,6 +1521,14 @@ export default function OfficeFieldCopyBidView() {
                                 })}
                               {fieldLaborData
                                 .filter((labor) => labor.totalPrice !== 0)
+                                .filter(
+                                  (labor) =>
+                                    !shouldSkipAggregatedLaborPdfRow(
+                                      labor,
+                                      group?.items,
+                                      fieldCopies
+                                    )
+                                )
                                 .map((labor, idx) => {
                                   const jt = String(labor?.jobType || "")
                                     .trim()
@@ -1537,7 +1562,11 @@ export default function OfficeFieldCopyBidView() {
                                         className="w-[400px] pr-2"
                                         style={{ textAlign: "left" }}
                                       >
-                                        {labor.jobType?.toUpperCase()} LABOR
+                                        {getLaborPdfDescription({
+                                          labor,
+                                          groupItems: group?.items,
+                                          fieldCopies,
+                                        })?.toUpperCase()}
                                       </td>
                                       <td style={{ textAlign: "center" }}>
                                         {labor?.size || ""}
@@ -1643,10 +1672,18 @@ export default function OfficeFieldCopyBidView() {
                           >
                             <span className="col-span-3 min-w-0">
                               <b className="w-[200px] inline-block">
-                                {item.jobType?.toUpperCase()}{" "}
-                                {laborLike
-                                  ? "LABOR"
-                                  : handleInvoiceJobType(item.jobType)}
+                                {item.source === "Labor"
+                                  ? getLaborPdfDescription({
+                                      labor: item,
+                                      groupItems:
+                                        categorizedFieldCopies?.[0]?.items,
+                                      fieldCopies,
+                                    })?.toUpperCase()
+                                  : `${item.jobType?.toUpperCase() || ""} ${
+                                      laborLike
+                                        ? "LABOR"
+                                        : handleInvoiceJobType(item.jobType)
+                                    }`.trim()}
                               </b>
                               <b>
                                 {formData?.customerType === "Normal"
@@ -1691,7 +1728,14 @@ export default function OfficeFieldCopyBidView() {
                           </div>
                         );
                       }
-                      if (item.totalPrice > 0) {
+                      if (
+                        item.totalPrice > 0 &&
+                        !shouldSkipAggregatedLaborPdfRow(
+                          item,
+                          categorizedFieldCopies?.[0]?.items,
+                          fieldCopies
+                        )
+                      ) {
                         const fromFc = costFromFieldCopiesForRow(item);
                         const rowCost =
                           fromFc > 0
@@ -1704,7 +1748,12 @@ export default function OfficeFieldCopyBidView() {
                           >
                             <span className="col-span-3 min-w-0">
                               <b className="w-[200px] inline-block">
-                                {item.jobType?.toUpperCase()} LABOR
+                                {getLaborPdfDescription({
+                                  labor: item,
+                                  groupItems:
+                                    categorizedFieldCopies?.[0]?.items,
+                                  fieldCopies,
+                                })?.toUpperCase()}
                               </b>
                               <b>
                                 {formData?.customerType === "Normal"
@@ -2175,8 +2224,7 @@ export default function OfficeFieldCopyBidView() {
                                     ? Number(item.totalPrice)
                                     : null;
                                 const displayPrice =
-                                  priceVal ??
-                                  (qty > 0 && totalVal != null ? totalVal / qty : null);
+                                  getFieldCopyLineDisplayPrice(item);
 
                                 return (
                                   <tr key={idx}>
@@ -2229,7 +2277,14 @@ export default function OfficeFieldCopyBidView() {
                                 return (
                                   <tr className="">
                                     <td className="">
-                                      <p>{labor.jobType} LABOR</p>
+                                      <p>
+                                        {getLaborPdfDescription({
+                                          labor,
+                                          groupItems:
+                                            categorizedFieldCopies?.[0]?.items,
+                                          fieldCopies,
+                                        })}
+                                      </p>
                                     </td>
                                     <td colSpan={5}></td>
                                     <td className="text-start">
@@ -2456,8 +2511,7 @@ export default function OfficeFieldCopyBidView() {
                                       ? Number(item.totalPrice)
                                       : null;
                                   const displayPrice =
-                                    priceVal ??
-                                    (qty > 0 && totalVal != null ? totalVal / qty : null);
+                                    getFieldCopyLineDisplayPrice(item);
 
                                   return (
                                     <tr
@@ -2518,6 +2572,14 @@ export default function OfficeFieldCopyBidView() {
                                 })}
                               {fieldLaborData
                                 .filter((labor) => labor.totalPrice !== 0)
+                                .filter(
+                                  (labor) =>
+                                    !shouldSkipAggregatedLaborPdfRow(
+                                      labor,
+                                      group?.items,
+                                      fieldCopies
+                                    )
+                                )
                                 .map((labor, idx) => {
                                   const jt = String(labor?.jobType || "").trim().toUpperCase();
                                   const hourly = Number(laborHourlyRateByJobType?.[jt] || 0);
@@ -2540,7 +2602,13 @@ export default function OfficeFieldCopyBidView() {
                                   return (
                                     <tr key={`labor-${idx}`} className="">
                                       <td className="ps-3">
-                                        <p>{labor.jobType} LABOR</p>
+                                        <p>
+                                          {getLaborPdfDescription({
+                                            labor,
+                                            groupItems: group?.items,
+                                            fieldCopies,
+                                          })}
+                                        </p>
                                       </td>
                                       <td className="text-center">
                                         {labor?.size || ""}
@@ -2642,10 +2710,18 @@ export default function OfficeFieldCopyBidView() {
                         >
                           <span className="col-span-3 min-w-0">
                             <b className="w-[200px] inline-block">
-                              {item.jobType?.toUpperCase()}{" "}
-                              {laborLike
-                                ? "LABOR"
-                                : handleInvoiceJobType(item.jobType)}
+                              {item.source === "Labor"
+                                ? getLaborPdfDescription({
+                                    labor: item,
+                                    groupItems:
+                                      categorizedFieldCopies?.[0]?.items,
+                                    fieldCopies,
+                                  })?.toUpperCase()
+                                : `${item.jobType?.toUpperCase() || ""} ${
+                                    laborLike
+                                      ? "LABOR"
+                                      : handleInvoiceJobType(item.jobType)
+                                  }`.trim()}
                             </b>
                             <b>
                               {formData?.customerType === "Normal"
@@ -2689,7 +2765,14 @@ export default function OfficeFieldCopyBidView() {
                       );
                     }
 
-                    if (item.totalPrice > 0) {
+                    if (
+                      item.totalPrice > 0 &&
+                      !shouldSkipAggregatedLaborPdfRow(
+                        item,
+                        categorizedFieldCopies?.[0]?.items,
+                        fieldCopies
+                      )
+                    ) {
                       const fromFc = costFromFieldCopiesForRow(item);
                       const rowCost =
                         fromFc > 0
@@ -2702,7 +2785,12 @@ export default function OfficeFieldCopyBidView() {
                         >
                           <span className="col-span-3 min-w-0">
                             <b className="w-[200px] inline-block">
-                              {item.jobType?.toUpperCase()} LABOR
+                              {getLaborPdfDescription({
+                                labor: item,
+                                groupItems:
+                                  categorizedFieldCopies?.[0]?.items,
+                                fieldCopies,
+                              })?.toUpperCase()}
                             </b>
                             <b>
                               {formData?.customerType === "Normal"
