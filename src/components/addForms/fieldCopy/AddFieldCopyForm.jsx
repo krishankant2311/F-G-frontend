@@ -14,7 +14,6 @@ import {
   ensureFgCostFromPrice,
   getMaterialNameInputValue,
   otherFieldCopyCostDisplayValue,
-  recalcLaborFieldCopyLine,
   recalcOtherFieldCopyLine,
   toPersistedCopy,
 } from "../../../utils/materialReference";
@@ -278,11 +277,14 @@ export default function AddFieldCopyForm() {
     //     return;
     //   }
     // }
-    if (updatedForm.source === "Labor") {
-      Object.assign(updatedForm, recalcLaborFieldCopyLine(updatedForm));
-    } else if (updatedForm.source === "Lump Sum") {
+    // AUTO CALCULATION FOR LUMP SUM & LABOR
+    if (
+      updatedForm.source === "Lump Sum" ||
+      updatedForm.source === "Labor"
+    ) {
       const cost = parseFloat(updatedForm.cost) || 0;
       const markupPercent = parseFloat(updatedForm.markUp) || 0;
+
       updatedForm.totalCost = cost;
       updatedForm.totalPrice = cost + (cost * markupPercent) / 100;
     }
@@ -317,8 +319,6 @@ export default function AddFieldCopyForm() {
           updatedForm,
           recalcOtherFieldCopyLine(updatedForm)
         );
-      } else if (updatedForm.source === "Labor") {
-        Object.assign(updatedForm, recalcLaborFieldCopyLine(updatedForm));
       } else {
         let costBase;
         if (updatedForm.source === "F&G") {

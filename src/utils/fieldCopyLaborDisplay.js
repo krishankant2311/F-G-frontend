@@ -101,29 +101,6 @@ export function getFieldCopyLineDisplayPrice(item) {
   return null;
 }
 
-/** Line TOTAL for Source=Labor (markup on sell total). */
-export function getFieldCopyLineDisplayTotal(item) {
-  if (!item) return null;
-  if (item.source === "Labor") {
-    const row = finalizeLaborSummaryRow(item);
-    return Number(row.totalPrice) > 0 ? Number(row.totalPrice) : null;
-  }
-  const totalVal =
-    item.totalPrice != null && item.totalPrice !== ""
-      ? Number(item.totalPrice)
-      : null;
-  if (totalVal != null && !Number.isNaN(totalVal) && totalVal > 0) {
-    return totalVal;
-  }
-  const unitPrice = getFieldCopyLineDisplayPrice(item);
-  const qty = Number(item.quantity);
-  const qtySafe = Number.isFinite(qty) && qty > 0 ? qty : 1;
-  if (unitPrice != null && unitPrice > 0) {
-    return unitPrice * qtySafe;
-  }
-  return null;
-}
-
 /** Line COST for tables/PDF: totalCost, else unit cost × quantity. */
 export function getFieldCopyLineDisplayCost(item) {
   if (!item) return 0;

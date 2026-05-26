@@ -12,7 +12,7 @@ import {
   getMaterialNameInputValue,
   hydrateOtherFieldCopyFromApi,
   materialNameBaseForEdit,
-  recalcLaborFieldCopyLine,
+  recalcLaborGenerateCustomerLine,
   recalcOtherFieldCopyLine,
   toPersistedCopy,
 } from "../../../utils/materialReference";
@@ -149,13 +149,16 @@ export default function EditCustomerFieldCopy() {
               form.markup = Math.round(autoMarkup * 100) / 100;
               form.markUp = form.markup;
             }
-          } else if ((form.source === "Lump Sum" || form.source === "Labor") && cost > 0 && totalPrice > 0) {
+          } else if (form.source === "Lump Sum" && cost > 0 && totalPrice > 0) {
             const autoMarkup = ((totalPrice - cost) / cost) * 100;
             form.markup = Math.round(autoMarkup * 100) / 100;
             form.markUp = form.markup;
           }
           if (form.source === "Other") {
             return hydrateOtherFieldCopyFromApi(form);
+          }
+          if (form.source === "Labor") {
+            return recalcLaborGenerateCustomerLine(form);
           }
           return form;
         });
@@ -205,7 +208,11 @@ export default function EditCustomerFieldCopy() {
     const compiled = {};
   
     forms.forEach((form) => {
-      const persisted = toPersistedCopy(form);
+      const row =
+        form.source === "Labor"
+          ? recalcLaborGenerateCustomerLine(form)
+          : form;
+      const persisted = toPersistedCopy(row);
       const {
         reference,
         measure,
@@ -592,8 +599,11 @@ export default function EditCustomerFieldCopy() {
 
     const updatedForm = { ...updatedForms[index], [name]: value };
 
-    // Autofill markup for Lump Sum & Labor FIRST (cost & totalPrice se) - baaki blocks se pehle
-    if ((name === "cost" || name === "totalPrice") && (updatedForm.source === "Lump Sum" || updatedForm.source === "Labor")) {
+    // Lump Sum only: reverse markup from cost + totalPrice
+    if (
+      (name === "cost" || name === "totalPrice") &&
+      updatedForm.source === "Lump Sum"
+    ) {
       const cost = parseFloat(updatedForm.cost) || 0;
       const totalPriceVal = parseFloat(updatedForm.totalPrice) || 0;
       if (cost > 0 && totalPriceVal > 0) {
@@ -624,13 +634,16 @@ export default function EditCustomerFieldCopy() {
     //   }
     // }
 
-    if (updatedForm.source === "Labor") {
-      Object.assign(updatedForm, recalcLaborFieldCopyLine(updatedForm));
-    } else if (updatedForm.source === "Lump Sum") {
+    if (updatedForm.source === "Lump Sum") {
       const cost = parseFloat(updatedForm.cost) || 0;
       const markupPercent = parseFloat(updatedForm.markUp) || 0;
       updatedForm.totalCost = cost;
       updatedForm.totalPrice = cost + (cost * markupPercent) / 100;
+    } else if (updatedForm.source === "Labor") {
+      Object.assign(
+        updatedForm,
+        recalcLaborGenerateCustomerLine(updatedForm)
+      );
     }
 
     // Calculate total price if both price and quantity are filled
@@ -687,7 +700,10 @@ export default function EditCustomerFieldCopy() {
           recalcOtherFieldCopyLine(updatedForm)
         );
       } else if (updatedForm.source === "Labor") {
-        Object.assign(updatedForm, recalcLaborFieldCopyLine(updatedForm));
+        Object.assign(
+          updatedForm,
+          recalcLaborGenerateCustomerLine(updatedForm)
+        );
       } else if (false) {
         const intermediatePrice =
           updatedForm.totalCost + (markupVal * updatedForm.totalCost) / 100;
@@ -706,20 +722,16 @@ export default function EditCustomerFieldCopy() {
           updatedForm,
           recalcOtherFieldCopyLine(updatedForm)
         );
+      } else if (updatedForm.source === "Labor") {
+        Object.assign(
+          updatedForm,
+          recalcLaborGenerateCustomerLine(updatedForm)
+        );
       } else {
         const markup = parseFloat(updatedForm.markup) || 0;
-
-        if (false) {
-          const intermediatePrice =
-            updatedForm.totalCost + (markup * updatedForm.totalCost) / 100;
-          updatedForm.totalPrice =
-            intermediatePrice + (adminTax * intermediatePrice) / 100;
-        } else {
-          const intermediatePrice =
-            updatedForm.totalCost + (markup * updatedForm.totalCost) / 100;
-          updatedForm.totalPrice =
-            intermediatePrice + (0 * intermediatePrice) / 100;
-        }
+        const intermediatePrice =
+          updatedForm.totalCost + (markup * updatedForm.totalCost) / 100;
+        updatedForm.totalPrice = intermediatePrice;
       }
 
       updatedForm.isTaxable =
@@ -1918,7 +1930,7 @@ export default function EditCustomerFieldCopy() {
                             value={formData.totalPrice}
                             max={10000000}
                             step="any"
-                            // readOnly
+                            readOnly={formData.source === "Labor"}
                             onChange={(e) => handleInputChange(e, index)}
                             min={0}
                           // required
