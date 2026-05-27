@@ -302,30 +302,6 @@ Approved by: __________________  Date: ____________________`,
       });
   };
 
-  useEffect(() => {
-    if (formData.customerType === "Normal") {
-      const taxAmount = (materialLaborData || []).reduce((acc, item) => {
-        if (!item) return acc;
-        if (item.dataType === "Material") {
-          if (!item.isTaxable) return acc;
-        } else if (!item.isLaborTaxable) {
-          return acc;
-        }
-        return acc + Number(item.totalPrice || 0);
-      }, 0);
-      setTaxableAmount(Number.parseFloat(taxAmount));
-    } else if (formData.customerType === "Commercial") {
-      setTaxableAmount(materialsTotal + laborTotal);
-    } else if (formData.customerType === "Exempt") {
-      setTaxableAmount(0);
-    }
-  }, [
-    formData?.customerType,
-    laborTotal,
-    materialLaborData,
-    materialsTotal,
-  ]);
-
   // console.log("Labor Data", laborData)
 
   useEffect(() => {
@@ -792,7 +768,7 @@ Approved by: __________________  Date: ____________________`,
   };
 
   const renderCustomerCopyJobTypeSummary = (compact = false) =>
-    materialLaborData.map((item, idx) => {
+    customerCopyInvoiceSummaryRows.map((item, idx) => {
       if (item.dataType === "Material") {
         const sourceLaborLabel =
           item.source === "Labor" && item.reference
@@ -953,6 +929,150 @@ Approved by: __________________  Date: ____________________`,
 
     return Object.values(categorizedData);
   }
+
+  const jobTypeForCustomerCopyTableRow = (row) => {
+    const refKey = String(row?.reference || "").trim().toUpperCase();
+    for (const fc of fieldCopies || []) {
+      const fcRef = String(fc?.reference || "").trim().toUpperCase();
+      if (String(fc?.source || "").toLowerCase() === "labor") {
+        if (refKey && fcRef === refKey) return fc.jobType || fc.type;
+        continue;
+      }
+      const base = materialNameBaseForEdit(
+        String(fc.reference || ""),
+        fc.vendorName
+      )
+        .trim()
+        .toUpperCase();
+      if (refKey && base === refKey) return fc.jobType || fc.type;
+    }
+    if (refKey.includes("HARDSCAPE")) return "Hardscape";
+    return formData?.jobType;
+  };
+
+  /** Invoice summary rows — rebuilt from Materials & Other table totals (not API materialData). */
+  const customerCopyInvoiceSummaryRows = useMemo(() => {
+    const tableItems = categorizedFieldCopies?.[0]?.items ?? [];
+    const materialSeeds = tableItems.map((row) => {
+      const { displayTotal } = getOfficeFieldCopyRowCalculations(row);
+      const sell =
+        Number(displayTotal) > 0
+          ? displayTotal
+          : Number(row?.totalPrice) || 0;
+      return {
+        jobType: jobTypeForCustomerCopyTableRow(row),
+        reference: row?.reference,
+        source: row?.source,
+        isTaxable: row?.isTaxable,
+        dataType: "Material",
+        totalPrice: sell,
+        quantity: row?.quantity,
+        cost: row?.cost,
+        markup: row?.markup ?? row?.markUp,
+      };
+    });
+
+    const laborSeeds = (fieldLaborData || [])
+      .filter((labor) => Number(labor?.totalPrice) !== 0)
+      .map((labor) => {
+        const crewRow = getOfficeFieldCopyCrewLaborRowFields(
+          labor,
+          laborManHoursByJobType,
+          laborHourlyRateByJobType,
+          formData?.jobType,
+          findLaborRateForJobType
+        );
+        const sell =
+          Number(crewRow?.displayTotal) > 0
+            ? crewRow.displayTotal
+            : Number(labor?.totalPrice) || 0;
+        return {
+          jobType: labor?.jobType,
+          totalPrice: sell,
+          isLaborTaxable: labor?.isLaborTaxable,
+          dataType: "Labor",
+        };
+      });
+
+    return sortByJobType([
+      ...categorizeMaterial(materialSeeds),
+      ...categorizeLabor(laborSeeds),
+    ]);
+  }, [
+    categorizedFieldCopies,
+    fieldCopies,
+    fieldLaborData,
+    formData?.jobType,
+    laborManHoursByJobType,
+    laborHourlyRateByJobType,
+    findLaborRateForJobType,
+  ]);
+
+  const customerCopyInvoiceGrossSubtotal = useMemo(
+    () =>
+      (customerCopyInvoiceSummaryRows || []).reduce(
+        (acc, item) => acc + (Number(item?.totalPrice) || 0),
+        0
+      ),
+    [customerCopyInvoiceSummaryRows]
+  );
+
+  const customerCopyInvoiceNetSubtotal = useMemo(() => {
+    const tc = Number(formData?.taxCredits) || 0;
+    const ntc = Number(formData?.nonTaxCredits) || 0;
+    return customerCopyInvoiceGrossSubtotal - tc - ntc;
+  }, [
+    customerCopyInvoiceGrossSubtotal,
+    formData?.taxCredits,
+    formData?.nonTaxCredits,
+  ]);
+
+  const customerCopySalesTax = useMemo(() => {
+    const tc = Number(formData?.taxCredits) || 0;
+    const base = formData?.isProjectTaxable
+      ? Math.max(0, Number(taxableAmount) - tc)
+      : tc > Number(taxableAmount)
+        ? 0
+        : Number(taxableAmount);
+    return (Number(taxPercent) * base) / 100;
+  }, [
+    formData?.isProjectTaxable,
+    formData?.taxCredits,
+    taxableAmount,
+    taxPercent,
+  ]);
+
+  const customerCopyGrandTotal = useMemo(
+    () => customerCopyInvoiceNetSubtotal + customerCopySalesTax,
+    [customerCopyInvoiceNetSubtotal, customerCopySalesTax]
+  );
+
+  useEffect(() => {
+    if (formData.customerType === "Normal") {
+      const taxAmount = (customerCopyInvoiceSummaryRows || []).reduce(
+        (acc, item) => {
+          if (!item) return acc;
+          if (item.dataType === "Material") {
+            if (!item.isTaxable) return acc;
+          } else if (!item.isLaborTaxable) {
+            return acc;
+          }
+          return acc + Number(item.totalPrice || 0);
+        },
+        0
+      );
+      setTaxableAmount(Number.parseFloat(taxAmount));
+    } else if (formData.customerType === "Commercial") {
+      setTaxableAmount(materialsTotal + laborTotal);
+    } else if (formData.customerType === "Exempt") {
+      setTaxableAmount(0);
+    }
+  }, [
+    formData?.customerType,
+    laborTotal,
+    customerCopyInvoiceSummaryRows,
+    materialsTotal,
+  ]);
 
   // function categorizeMaterial(materialData) {
   //   const categorizedData = materialData.reduce((result, item) => {
@@ -1811,14 +1931,13 @@ Approved by: __________________  Date: ____________________`,
                       <span>
                         <b>$</b>{" "}
                         <span className="inline-block w-[80px] text-end">
-                          {(
-                            materialsTotal +
-                            laborTotal -
-                            (formData.taxCredits + formData.nonTaxCredits)
-                          )?.toLocaleString("en-US", {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
+                          {customerCopyInvoiceNetSubtotal.toLocaleString(
+                            "en-US",
+                            {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            }
+                          )}
                         </span>
                       </span>
                     </div>
@@ -1904,29 +2023,10 @@ Approved by: __________________  Date: ____________________`,
                         <b>$</b>{" "}
                         <span className="inline-block w-[80px] text-end">
                           <span className="border-b border-black pb-[7px]">
-                            {formData.isProjectTaxable
-                              ? (
-                                (taxPercent *
-                                  (taxableAmount - formData.taxCredits)) /
-                                100 +
-                                (materialsTotal +
-                                  laborTotal -
-                                  (formData.taxCredits +
-                                    formData.nonTaxCredits))
-                              )?.toLocaleString("en-US", {
-                                minimumFractionDigits: 2,
-                                maximumFractionDigits: 2,
-                              })
-                              : (
-                                (taxPercent * taxableAmount) / 100 +
-                                (materialsTotal +
-                                  laborTotal -
-                                  (formData.taxCredits +
-                                    formData.nonTaxCredits))
-                              )?.toLocaleString("en-US", {
-                                minimumFractionDigits: 2,
-                                maximumFractionDigits: 2,
-                              })}
+                            {customerCopyGrandTotal.toLocaleString("en-US", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}
                           </span>
                         </span>
                       </span>
@@ -2177,11 +2277,7 @@ Approved by: __________________  Date: ____________________`,
                     <span>SubTotal</span>
                     <span>
                       <b>$</b>{" "}
-                      {(
-                        materialsTotal +
-                        laborTotal -
-                        (formData.taxCredits + formData.nonTaxCredits)
-                      )?.toLocaleString("en-US", {
+                      {customerCopyInvoiceNetSubtotal.toLocaleString("en-US", {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}
@@ -2193,7 +2289,7 @@ Approved by: __________________  Date: ____________________`,
 
               {formData &&
                 formData.taxCredits + formData.nonTaxCredits <=
-                materialsTotal + laborTotal ? (
+                customerCopyInvoiceGrossSubtotal ? (
                 !loading ? (
                   formData && formData.taxCredits <= taxableAmount ? (
                     <div className="">
@@ -2267,29 +2363,10 @@ Approved by: __________________  Date: ____________________`,
                         <span>Grand Total</span>
                         <span>
                           <b>$</b>{" "}
-                          {formData.isProjectTaxable
-                            ? (
-                              (taxPercent *
-                                (taxableAmount - formData.taxCredits)) /
-                              100 +
-                              (materialsTotal +
-                                laborTotal -
-                                (formData.taxCredits +
-                                  formData.nonTaxCredits))
-                            )?.toLocaleString("en-US", {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })
-                            : (
-                              (taxPercent * taxableAmount) / 100 +
-                              (materialsTotal +
-                                laborTotal -
-                                (formData.taxCredits +
-                                  formData.nonTaxCredits))
-                            )?.toLocaleString("en-US", {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })}
+                          {customerCopyGrandTotal.toLocaleString("en-US", {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
                         </span>
                       </div>
                     </div>
@@ -2329,29 +2406,10 @@ Approved by: __________________  Date: ____________________`,
                             <span>Grand Total</span>
                             <span>
                               <b>$</b>{" "}
-                              {formData.isProjectTaxable
-                                ? (
-                                  (taxPercent *
-                                    (taxableAmount - formData.taxCredits)) /
-                                  100 +
-                                  (materialsTotal +
-                                    laborTotal -
-                                    (formData.taxCredits +
-                                      formData.nonTaxCredits))
-                                )?.toLocaleString("en-US", {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                })
-                                : (
-                                  0 / 100 +
-                                  (materialsTotal +
-                                    laborTotal -
-                                    (formData.taxCredits +
-                                      formData.nonTaxCredits))
-                                )?.toLocaleString("en-US", {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                })}
+                              {customerCopyGrandTotal.toLocaleString("en-US", {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
                             </span>
                           </div>
                         </div>
@@ -2377,7 +2435,7 @@ Approved by: __________________  Date: ____________________`,
                 className={`bg-[#00613e] text-white py-1 px-6 md:mr-3 mr-0 ${(formData &&
                   formData.taxCredits > taxableAmount &&
                   formData.isProjectTaxable) ||
-                  materialsTotal + laborTotal <
+                  customerCopyInvoiceGrossSubtotal <
                   formData.taxCredits + formData.nonTaxCredits
                   ? "cursor-not-allowed"
                   : "cursor-pointer"
@@ -2390,7 +2448,7 @@ Approved by: __________________  Date: ____________________`,
                   (formData &&
                     formData.taxCredits > taxableAmount &&
                     formData.isProjectTaxable) ||
-                  materialsTotal + laborTotal <
+                  customerCopyInvoiceGrossSubtotal <
                   formData.taxCredits + formData.nonTaxCredits
                 }
               // onClick={downloadPdf}

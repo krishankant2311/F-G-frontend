@@ -1980,7 +1980,6 @@ export default function OfficeFieldCopyBidView() {
                       >
                         <span className="col-span-3 min-w-0">
                           SALES TAX
-                          {taxPercent > 0 ? ` (${taxPercent}%)` : ""}
                         </span>
                         <span className="min-w-0" aria-hidden />
                         <span className="min-w-0" aria-hidden />

@@ -17,6 +17,10 @@ import {
   getOfficeFieldCopyLineCost,
   getLaborPdfDescription,
   getOfficeFieldCopyRowCalculations,
+  isLumpSumLaborCrewEntry,
+  isLumpSumLaborFieldCopyItem,
+  lookupLaborMapValue,
+  shouldHideContractorLaborWorkSummaryRow,
   shouldSkipAggregatedLaborPdfRow,
 } from "../../utils/fieldCopyLaborDisplay";
 
@@ -71,8 +75,36 @@ export default function OfficeFieldCopyView() {
 
   const { tableSize } = useTableContext();
   const billingTypeLower = String(formData?.billingType || "").toLowerCase();
+  const bidAmountNumeric = Number(
+    String(formData?.bidAmount ?? "")
+      .replace(/[^0-9.-]/g, "")
+      .trim()
+  );
+  const hasBidSignal =
+    (Number.isFinite(bidAmountNumeric) ? bidAmountNumeric : 0) > 0 ||
+    String(formData?.bidCopyId || "")
+      .trim()
+      .length > 0;
   const isBidProject =
-    billingTypeLower.includes("bid") && !billingTypeLower.includes("no bid");
+    !billingTypeLower.includes("no bid") &&
+    (billingTypeLower.includes("bid") || hasBidSignal);
+
+  const taxEq = (a, b) => {
+    const x = a === true || a === "true";
+    const y = b === true || b === "true";
+    return x === y;
+  };
+
+  const isLaborLikeEntry = (entry) => {
+    const source = String(entry?.source || "").toLowerCase();
+    const jobTypeText = String(entry?.jobType || "").toLowerCase();
+    const referenceText = String(entry?.reference || "").toLowerCase();
+    return (
+      source === "labor" ||
+      jobTypeText.includes("labor") ||
+      referenceText.includes("labor")
+    );
+  };
 
   const invoiceSalesTax = useMemo(() => {
     const tc = Number(formData.taxCredits) || 0;
@@ -102,20 +134,61 @@ export default function OfficeFieldCopyView() {
   ]);
 
   const workSummaryRows = useMemo(() => {
-    if (!isBidProject) return materialLaborData;
+    const hideContractorLaborDup = (rows) =>
+      (rows || []).filter(
+        (item) =>
+          !shouldHideContractorLaborWorkSummaryRow(item, {
+            laborData,
+            fieldLaborData,
+          })
+      );
+
+    if (!isBidProject) return hideContractorLaborDup(materialLaborData);
 
     const tableItems = categorizedFieldCopies?.[0]?.items || [];
-    const tableDerivedMaterials = tableItems.map((item) => {
-      const rowJobType = String(item?.jobType || item?.type || "").trim();
+    const bidMaterialSeed = tableItems.map((item) => {
+      const sourceNorm = String(item?.source || "")
+        .trim()
+        .toLowerCase();
+      const laborLike = isFieldCopyLaborContext(item);
+      const isLaborSource = sourceNorm === "labor" || laborLike;
+      const jobTypeFromReference = String(item?.reference || "")
+        .replace(/\s*\([^)]*\)\s*$/, "")
+        .trim();
+      const fallbackJobType = String(item?.jobType || item?.type || "").trim();
+      const qty = Number(item?.quantity || 0);
+      const unitPrice = Number(item?.price || 0);
+      const unitCost = Number(item?.cost || 0);
+      const markupPct = Number(item?.markup ?? item?.markUp ?? 0);
+      const explicitTotalPrice = Number(item?.totalPrice || 0);
+      const derivedSellFromPrice =
+        unitPrice > 0 && qty > 0 ? unitPrice * qty : 0;
+      const derivedSellFromCost =
+        unitCost > 0
+          ? unitCost * (qty > 0 ? qty : 1) * (1 + markupPct / 100)
+          : 0;
+      const displayTotal =
+        explicitTotalPrice > 0
+          ? explicitTotalPrice
+          : derivedSellFromPrice > 0
+            ? derivedSellFromPrice
+            : derivedSellFromCost;
+      const explicitTotalCost = Number(item?.totalCost || 0);
+      const displayCost =
+        explicitTotalCost > 0
+          ? explicitTotalCost
+          : unitCost > 0
+            ? unitCost * (qty > 0 ? qty : 1)
+            : 0;
       return {
-        jobType: rowJobType,
+        jobType: fallbackJobType || jobTypeFromReference,
         reference: item?.reference,
         description: item?.description,
-        source: item?.source,
+        source: isLaborSource ? "Labor" : item?.source,
         dataType: "Material",
         isTaxable: item?.isTaxable,
-        totalPrice: Number(item?.totalPrice || 0),
-        totalCost: lineItemCostSum(item),
+        totalPrice: displayTotal,
+        totalCost: displayCost,
         cost: item?.cost,
         quantity: item?.quantity,
         price: item?.price,
@@ -124,18 +197,22 @@ export default function OfficeFieldCopyView() {
       };
     });
 
-    const mergedMaterials = categorizeMaterial(tableDerivedMaterials);
-    const mergedLabors = categorizeLabor(
-      (fieldLaborData || []).map((labor) => ({
-        ...labor,
-        dataType: "Labor",
-      }))
+    const mergedMaterials = categorizeMaterial(
+      bidMaterialSeed.filter((row) => Number(row?.totalPrice || 0) > 0)
     );
-    return sortByJobType([...mergedMaterials, ...mergedLabors]);
+
+    const mergedLabors = (laborData || []).map((labor) => ({
+      ...labor,
+      dataType: "Labor",
+    }));
+    return hideContractorLaborDup(
+      sortByJobType([...mergedMaterials, ...mergedLabors])
+    );
   }, [
     isBidProject,
     materialLaborData,
     categorizedFieldCopies,
+    laborData,
     fieldLaborData,
   ]);
 
@@ -258,6 +335,12 @@ export default function OfficeFieldCopyView() {
   const renderOfficeCrewLaborWorkSummary = (gridClass, keyPrefix = "ws-crew") =>
     getOfficeCrewLaborSources()
       .filter((labor) => {
+        if (
+          !isBidProject &&
+          isLumpSumLaborCrewEntry(labor, formData?.jobType)
+        ) {
+          return false;
+        }
         const hours = getFieldCopyPdfLaborManHours(
           labor,
           laborManHoursByJobType
@@ -305,6 +388,12 @@ export default function OfficeFieldCopyView() {
   const renderOfficeCrewLaborRows = (keyPrefix = "crew") =>
     getOfficeCrewLaborSources()
       .filter((labor) => {
+        if (
+          !isBidProject &&
+          isLumpSumLaborCrewEntry(labor, formData?.jobType)
+        ) {
+          return false;
+        }
         const hours = getFieldCopyPdfLaborManHours(
           labor,
           laborManHoursByJobType
@@ -358,6 +447,29 @@ export default function OfficeFieldCopyView() {
         );
       });
 
+  const formatQtyText = (value) => {
+    const n = Number(value);
+    if (!(n > 0)) return "";
+    return Number.isInteger(n)
+      ? String(n)
+      : n.toLocaleString("en-US", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+  };
+
+  const getBidTableQtyFallback = (item, qtyText = "") => {
+    if (qtyText) return qtyText;
+    const ownQty = Number(item?.quantity);
+    if (ownQty > 0) return formatQtyText(ownQty);
+    if (!isBidProject) return "";
+    if (!isLaborLikeEntry(item)) return "";
+    const jt = String(item?.jobType || item?.type || "").trim();
+    if (!jt) return "";
+    const hrs = lookupLaborMapValue(laborManHoursByJobType, jt);
+    return hrs > 0 ? formatQtyText(hrs) : "";
+  };
+
   // console.log("Formdata credits", formData.credits);
 
   const downloadPdf = () => {
@@ -400,7 +512,12 @@ export default function OfficeFieldCopyView() {
       materialData.length > 0 ||
       laborData.length > 0
     ) {
-      const summarizedData = summarizeFieldCopies(fieldCopies);
+      let summarizedData = summarizeFieldCopies(fieldCopies);
+      if (!isBidProject) {
+        summarizedData = summarizedData.filter(
+          (item) => !isLumpSumLaborFieldCopyItem(item)
+        );
+      }
       setCategorizedFieldCopies([
         { category: "Materials & Other ", items: summarizedData },
       ]);
@@ -408,7 +525,344 @@ export default function OfficeFieldCopyView() {
       setLaborTotal(laborTotal);
       setMaterialsTotal(materialsTotal);
     }
-  }, [fieldCopies]);
+  }, [fieldCopies, isBidProject]);
+
+  const visibleCrewLaborRows = useMemo(() => {
+    return getOfficeCrewLaborSources()
+      .filter((labor) => {
+        if (!isBidProject && isLumpSumLaborCrewEntry(labor, formData?.jobType)) {
+          return false;
+        }
+        const hours = getFieldCopyPdfLaborManHours(labor, laborManHoursByJobType);
+        return hours > 0 || Number(labor?.totalPrice) > 0;
+      })
+      .map((labor) => ({
+        labor,
+        row: getOfficeFieldCopyCrewLaborRowFields(
+          labor,
+          laborManHoursByJobType,
+          laborHourlyRateByJobType,
+          formData?.jobType
+        ),
+      }))
+      .filter(({ row }) => (row?.manHours > 0) || (row?.displayTotal > 0));
+  }, [
+    isBidProject,
+    formData?.jobType,
+    laborManHoursByJobType,
+    laborHourlyRateByJobType,
+    fieldLaborData,
+  ]);
+
+  const isWorkSummaryLineTaxableRt = (item, labor) => {
+    const customerType = formData?.customerType;
+    if (customerType === "Exempt") return false;
+    if (customerType === "Commercial") {
+      return taxEq(labor?.isLaborTaxable ?? labor?.isTaxable, true);
+    }
+    if (labor) {
+      return taxEq(labor?.isLaborTaxable ?? labor?.isTaxable, true);
+    }
+    const laborLike = isLaborLikeEntry(item);
+    if (laborLike || ["Labor", "Other"].includes(item?.source)) {
+      return taxEq(item?.isTaxable, true);
+    }
+    if (["Lump Sum"].includes(item?.source)) {
+      return taxEq(item?.isTaxable, true);
+    }
+    // Normal material rows (e.g. LANDSCAPE MATERIAL) show RT in Work Summary.
+    if (item?.dataType === "Material") return true;
+    return taxEq(item?.isLaborTaxable ?? item?.isTaxable, true);
+  };
+
+  function lineItemCostSum(item) {
+    const lineCost = getOfficeFieldCopyLineCost(item);
+    if (lineCost > 0) return lineCost;
+    if (
+      item?.totalCost != null &&
+      item.totalCost !== "" &&
+      !Number.isNaN(Number(item.totalCost))
+    ) {
+      return Number(item.totalCost);
+    }
+    const c = item.cost;
+    const q = item.quantity != null && item.quantity !== "" ? Number(item.quantity) : 1;
+    if (c != null && c !== "" && Number(c) > 0) {
+      return Number(c) * q;
+    }
+    return 0;
+  }
+
+  const jobTypeMatch = (a, b) =>
+    String(a ?? "")
+      .trim()
+      .toLowerCase() ===
+    String(b ?? "")
+      .trim()
+      .toLowerCase();
+
+  const costFromFieldCopiesForRow = (row) => {
+    if (!fieldCopies?.length || !row) return 0;
+    const rowJt = row.jobType;
+    let sum = 0;
+    for (const fc of fieldCopies) {
+      const fcJt = fc.jobType ?? fc.type;
+      if (!fcJt || !jobTypeMatch(fcJt, rowJt)) continue;
+
+      if (row.dataType === "Material") {
+        const rowCat =
+          row.source === "Labor" ? "Labor" : "F&G/Other/LumpSum";
+        const fcCat =
+          fc.source === "Labor" ? "Labor" : "F&G/Other/LumpSum";
+        if (fcCat !== rowCat) continue;
+        if (!taxEq(fc.isTaxable, row.isTaxable)) continue;
+        sum += lineItemCostSum(fc);
+      } else {
+        if (fc.source !== "Labor") continue;
+        const lt = fc.isLaborTaxable ?? fc.isTaxable;
+        if (!taxEq(lt, row.isLaborTaxable)) continue;
+        sum += lineItemCostSum(fc);
+      }
+    }
+    return sum;
+  };
+
+  const sellFromFieldCopiesForRow = (row) => {
+    if (!fieldCopies?.length || !row) return 0;
+    const rowJt = row.jobType;
+    let sum = 0;
+    for (const fc of fieldCopies) {
+      if (!fc || fc.status === "Delete") continue;
+      const fcJt = fc.jobType ?? fc.type;
+      if (!fcJt || !jobTypeMatch(fcJt, rowJt)) continue;
+
+      if (row.dataType === "Material") {
+        const rowCat =
+          row.source === "Labor" ? "Labor" : "F&G/Other/LumpSum";
+        const fcCat =
+          fc.source === "Labor" ? "Labor" : "F&G/Other/LumpSum";
+        if (fcCat !== rowCat) continue;
+        if (!taxEq(fc.isTaxable, row.isTaxable)) continue;
+      } else {
+        if (fc.source !== "Labor") continue;
+        const lt = fc.isLaborTaxable ?? fc.isTaxable;
+        if (!taxEq(lt, row.isLaborTaxable)) continue;
+      }
+      const lineCost = lineItemCostSum(fc);
+      const markupPct = Number(fc?.markup ?? fc?.markUp) || 0;
+      if (lineCost > 0) {
+        sum += lineCost * (1 + markupPct / 100);
+      } else {
+        sum += Number(getOfficeFieldCopyRowCalculations(fc)?.displayTotal || 0);
+      }
+    }
+    return Math.round(sum * 100) / 100;
+  };
+
+  const getBidStyleWorkSummaryCost = (item) => {
+    const fromFc = costFromFieldCopiesForRow(item);
+    if (item?.dataType === "Material") {
+      return fromFc > 0 ? fromFc : Number(item?.totalCost) || 0;
+    }
+    return fromFc > 0
+      ? fromFc
+      : Number(item?.totalCost) || Number(item?.cost) || Number(item?.totalPrice) || 0;
+  };
+
+  const getBidStyleWorkSummarySell = (item) => {
+    const fromFc = sellFromFieldCopiesForRow(item);
+    return fromFc > 0 ? fromFc : Number(item?.totalPrice) || 0;
+  };
+
+  const workSummaryDisplayTotals = useMemo(() => {
+    const groupItems = categorizedFieldCopies?.[0]?.items;
+    let costSubtotal = 0;
+    let sellSubtotal = 0;
+    let taxableCost = 0;
+    let taxableSell = 0;
+
+    const addLine = (cost, sell, isTaxable) => {
+      costSubtotal += cost;
+      sellSubtotal += sell;
+      if (isTaxable) {
+        taxableCost += cost;
+        taxableSell += sell;
+      }
+    };
+
+    for (const item of workSummaryRows || []) {
+      if (item.dataType === "Material") {
+        const cost = getBidStyleWorkSummaryCost(item);
+        const sell = getBidStyleWorkSummarySell(item);
+        if (!(cost > 0) && !(sell > 0)) continue;
+        addLine(cost, sell, isWorkSummaryLineTaxableRt(item));
+        continue;
+      }
+
+      const crewManHours = getFieldCopyPdfLaborManHours(
+        item,
+        laborManHoursByJobType
+      );
+      const isSourceLaborLine =
+        String(item?.source || "").toLowerCase() === "labor";
+      const sell = getBidStyleWorkSummarySell(item);
+      if (
+        sell > 0 &&
+        (isSourceLaborLine ||
+          (crewManHours <= 0 &&
+            !shouldSkipAggregatedLaborPdfRow(
+              item,
+              groupItems,
+              fieldCopies
+            )))
+      ) {
+        const cost = getBidStyleWorkSummaryCost(item);
+        addLine(cost, sell, isWorkSummaryLineTaxableRt(item));
+      }
+    }
+
+    for (const { labor, row } of visibleCrewLaborRows) {
+      const cost = Number(row?.lineCost) || 0;
+      const sell = Number(row?.displayTotal) || 0;
+      if (!(cost > 0) && !(sell > 0)) continue;
+      addLine(cost, sell, isWorkSummaryLineTaxableRt(null, labor, row));
+    }
+
+    return { costSubtotal, sellSubtotal, taxableCost, taxableSell };
+  }, [
+    workSummaryRows,
+    fieldCopies,
+    visibleCrewLaborRows,
+    categorizedFieldCopies,
+    laborManHoursByJobType,
+    formData?.customerType,
+  ]);
+
+  const invoiceCostSubtotal = workSummaryDisplayTotals.costSubtotal;
+  const invoiceSellSubtotal = workSummaryDisplayTotals.sellSubtotal;
+  const invoiceSellTaxable = workSummaryDisplayTotals.taxableSell;
+
+  const invoiceCostTaxable = useMemo(() => {
+    const customerType = formData?.customerType;
+
+    if (customerType === "Exempt") {
+      return 0;
+    }
+
+    if (customerType === "Commercial") {
+      return invoiceCostSubtotal;
+    }
+
+    const normalizedProjectCode = String(formData?.projectCode || "")
+      .trim()
+      .toUpperCase();
+    if (normalizedProjectCode === "ALAM-409-NB") {
+      let costSum = 0;
+      for (const line of fieldCopies || []) {
+        if (!line || line.status === "Delete") continue;
+        if (String(line?.source || "").toLowerCase() === "labor") continue;
+        if (!line?.isTaxable) continue;
+        costSum += lineItemCostSum(line);
+      }
+      for (const labor of laborData || []) {
+        if (!labor?.isLaborTaxable) continue;
+        costSum += lineItemCostSum(labor);
+      }
+      return costSum;
+    }
+
+    return workSummaryDisplayTotals.taxableCost;
+  }, [
+    workSummaryDisplayTotals,
+    formData?.customerType,
+    formData?.projectCode,
+    fieldCopies,
+    laborData,
+    invoiceCostSubtotal,
+  ]);
+
+  const invoiceSalesTaxOnCost = useMemo(() => {
+    const tc = Number(formData.taxCredits) || 0;
+    const base = Number(invoiceCostTaxable) || 0;
+    if (formData.isProjectTaxable) {
+      return (taxPercent * Math.max(0, base - tc)) / 100;
+    }
+    if (tc > base) return 0;
+    return (taxPercent * base) / 100;
+  }, [
+    formData.isProjectTaxable,
+    formData.taxCredits,
+    taxPercent,
+    invoiceCostTaxable,
+  ]);
+
+  const invoiceCostGrandTotal = useMemo(() => {
+    const tc = Number(formData.taxCredits) || 0;
+    const ntc = Number(formData.nonTaxCredits) || 0;
+    const subtotalCost = Number(invoiceCostSubtotal) || 0;
+    return subtotalCost - tc - ntc + invoiceSalesTaxOnCost;
+  }, [
+    invoiceCostSubtotal,
+    invoiceSalesTaxOnCost,
+    formData.taxCredits,
+    formData.nonTaxCredits,
+  ]);
+
+  const invoiceSellGrandTotal = useMemo(() => {
+    const tc = Number(formData.taxCredits) || 0;
+    const ntc = Number(formData.nonTaxCredits) || 0;
+    return (
+      Number(invoiceSellSubtotal) -
+      tc -
+      ntc +
+      (Number(invoiceSalesTax) || 0)
+    );
+  }, [
+    invoiceSellSubtotal,
+    invoiceSalesTax,
+    formData.taxCredits,
+    formData.nonTaxCredits,
+  ]);
+
+  useEffect(() => {
+    const customerType = formData?.customerType;
+    if (customerType === "Exempt") {
+      setTaxableAmount(0);
+      return;
+    }
+    if (customerType === "Commercial") {
+      setTaxableAmount((materialsTotal || 0) + (laborTotal || 0));
+      return;
+    }
+
+    const normalizedProjectCode = String(formData?.projectCode || "")
+      .trim()
+      .toUpperCase();
+    if (normalizedProjectCode === "ALAM-409-NB") {
+      let rawTaxable = 0;
+      for (const line of fieldCopies || []) {
+        if (!line || line.status === "Delete") continue;
+        if (String(line?.source || "").toLowerCase() === "labor") continue;
+        if (line?.isTaxable) rawTaxable += Number(line?.totalPrice || 0);
+      }
+      for (const labor of laborData || []) {
+        if (!labor?.isLaborTaxable) continue;
+        rawTaxable += Number(labor?.totalPrice || 0);
+      }
+      setTaxableAmount(rawTaxable);
+      return;
+    }
+
+    setTaxableAmount(workSummaryDisplayTotals.taxableSell);
+  }, [
+    formData?.customerType,
+    formData?.projectCode,
+    workSummaryDisplayTotals,
+    fieldCopies,
+    laborData,
+    materialsTotal,
+    laborTotal,
+  ]);
 
   // Calculate aggregate COST and MARKUP amounts for all items
   useEffect(() => {
@@ -431,82 +885,6 @@ export default function OfficeFieldCopyView() {
     setCost(hasValidCost ? calculatedCost : null);
     setMarkup(calculatedMarkup);
   }, [fieldCopies, materialsTotal, laborTotal, formData?.taxCredits, formData?.nonTaxCredits]);
-
-
-  useEffect(() => {
-    const customerType = formData?.customerType;
-    if (customerType === "Exempt") {
-      setTaxableAmount(0);
-      return;
-    }
-    if (customerType === "Commercial") {
-      setTaxableAmount((materialsTotal || 0) + (laborTotal || 0));
-      return;
-    }
-
-    const normalizedProjectCode = String(formData?.projectCode || "")
-      .trim()
-      .toUpperCase();
-    // ALAM-409-NB: keep legacy raw-line taxable math.
-    if (normalizedProjectCode === "ALAM-409-NB") {
-      let rawTaxable = 0;
-      for (const line of fieldCopies || []) {
-        if (!line || line.status === "Delete") continue;
-        if (String(line?.source || "").toLowerCase() === "labor") continue;
-        if (line?.isTaxable) rawTaxable += Number(line?.totalPrice || 0);
-      }
-      for (const labor of laborData || []) {
-        if (!labor?.isLaborTaxable) continue;
-        rawTaxable += Number(labor?.totalPrice || 0);
-      }
-      setTaxableAmount(rawTaxable);
-      return;
-    }
-
-    // Normal: taxable base = Work Summary taxable rows only (single source, no double count).
-    let taxAmount = 0;
-    for (const item of workSummaryRows || []) {
-      const sell = Number(item?.totalPrice) || 0;
-      if (!(sell > 0)) continue;
-      const isRowTaxable =
-        item?.dataType === "Labor"
-          ? taxEq(item?.isLaborTaxable ?? item?.isTaxable, true)
-          : taxEq(item?.isTaxable, true);
-      if (!isRowTaxable) continue;
-      taxAmount += sell;
-    }
-    setTaxableAmount(taxAmount);
-  }, [
-    formData?.customerType,
-    formData?.projectCode,
-    materialsTotal,
-    laborTotal,
-    workSummaryRows,
-    fieldCopies,
-    laborData,
-  ]);
-
-  // useEffect(() => {
-  //   let taxAmount = 0;
-  //   if (
-  //     categorizedBidCopies &&
-  //     categorizedBidCopies[0] &&
-  //     categorizedBidCopies[0]?.items?.length > 0
-  //   ) {
-  //     for (let type of categorizedBidCopies[0].items) {
-  //       if (type.isTaxable) {
-  //         taxAmount +=
-  //           Number.parseFloat(type.price) * Number.parseFloat(type.quantity);
-  //       }
-  //     }
-  //   }
-  //   for (let labor of laborData) {
-  //     if (labor.isLaborTaxable) {
-  //       taxAmount += Number.parseFloat(labor.totalPrice);
-  //     }
-  //   }
-  //   setTaxableAmount(taxAmount);
-  // }, [categorizedBidCopies]);
 
   useEffect(() => {
     getProjectById();
@@ -588,7 +966,11 @@ export default function OfficeFieldCopyView() {
       }
     } catch (error) {
       console.error(error);
-      toast.error(error.response.message);
+      toast.error(
+        error?.response?.data?.message ||
+          error?.message ||
+          "Something went wrong while loading project data."
+      );
     }
   };
 
@@ -737,24 +1119,6 @@ export default function OfficeFieldCopyView() {
     return data.sort((a, b) => a.jobType.localeCompare(b.jobType));
   }
 
-  function lineItemCostSum(item) {
-    const lineCost = getOfficeFieldCopyLineCost(item);
-    if (lineCost > 0) return lineCost;
-    if (
-      item?.totalCost != null &&
-      item.totalCost !== "" &&
-      !Number.isNaN(Number(item.totalCost))
-    ) {
-      return Number(item.totalCost);
-    }
-    const c = item.cost;
-    const q = item.quantity != null && item.quantity !== "" ? Number(item.quantity) : 1;
-    if (c != null && c !== "" && Number(c) > 0) {
-      return Number(c) * q;
-    }
-    return 0;
-  }
-
   function categorizeLabor(laborData) {
     const categorizedData = laborData.reduce((result, item) => {
       // Create a unique key combining jobType and isLaborTaxable to handle distinctions
@@ -892,7 +1256,11 @@ export default function OfficeFieldCopyView() {
       }
     } catch (error) {
       console.error(error);
-      toast.error(error.response.message);
+      toast.error(
+        error?.response?.data?.message ||
+          error?.message ||
+          "Something went wrong while loading address."
+      );
     }
   };
 
@@ -917,7 +1285,11 @@ export default function OfficeFieldCopyView() {
       }
     } catch (error) {
       console.error(error);
-      toast.error(error.response.message);
+      toast.error(
+        error?.response?.data?.message ||
+          error?.message ||
+          "Something went wrong while loading job type."
+      );
     }
   };
 
@@ -956,7 +1328,11 @@ export default function OfficeFieldCopyView() {
       }
     } catch (error) {
       console.error(error);
-      toast.error(error.response.message);
+      toast.error(
+        error?.response?.data?.message ||
+          error?.message ||
+          "Something went wrong while loading tax percentage."
+      );
     }
   };
 
@@ -1147,69 +1523,6 @@ export default function OfficeFieldCopyView() {
     }
   };
 
-  const isLaborLikeEntry = (entry) => {
-    const source = String(entry?.source || "").toLowerCase();
-    const jobTypeText = String(entry?.jobType || "").toLowerCase();
-    const referenceText = String(entry?.reference || "").toLowerCase();
-    return (
-      source === "labor" ||
-      jobTypeText.includes("labor") ||
-      referenceText.includes("labor")
-    );
-  };
-
-  const taxEq = (a, b) => {
-    const x = a === true || a === "true";
-    const y = b === true || b === "true";
-    return x === y;
-  };
-
-  const jobTypeMatch = (a, b) =>
-    String(a ?? "")
-      .trim()
-      .toLowerCase() ===
-    String(b ?? "")
-      .trim()
-      .toLowerCase();
-
-  /** Work Summary COST: sum from flat fieldCopies only (no backend change). */
-  const costFromFieldCopiesForRow = (row) => {
-    if (!fieldCopies?.length || !row) return 0;
-    const rowJt = row.jobType;
-    let sum = 0;
-    for (const fc of fieldCopies) {
-      const fcJt = fc.jobType ?? fc.type;
-      if (!fcJt || !jobTypeMatch(fcJt, rowJt)) continue;
-
-      if (row.dataType === "Material") {
-        const rowCat =
-          row.source === "Labor" ? "Labor" : "F&G/Other/LumpSum";
-        const fcCat =
-          fc.source === "Labor" ? "Labor" : "F&G/Other/LumpSum";
-        if (fcCat !== rowCat) continue;
-        if (!taxEq(fc.isTaxable, row.isTaxable)) continue;
-        sum += lineItemCostSum(fc);
-      } else {
-        if (fc.source !== "Labor") continue;
-        const lt = fc.isLaborTaxable ?? fc.isTaxable;
-        if (!taxEq(lt, row.isLaborTaxable)) continue;
-        sum += lineItemCostSum(fc);
-      }
-    }
-    return sum;
-  };
-
-  // Keep Work Summary COST logic aligned with Bid view.
-  const getBidStyleWorkSummaryCost = (item) => {
-    const fromFc = costFromFieldCopiesForRow(item);
-    if (item?.dataType === "Material") {
-      return fromFc > 0 ? fromFc : Number(item?.totalCost) || 0;
-    }
-    return fromFc > 0
-      ? fromFc
-      : Number(item?.totalCost) || Number(item?.cost) || Number(item?.totalPrice) || 0;
-  };
-
   /** Column weights: narrower DESCRIPTION so other columns shift right. */
   const workSummaryGridClass =
     "grid grid-cols-[minmax(340px,36%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)] gap-x-0 gap-y-1";
@@ -1217,71 +1530,6 @@ export default function OfficeFieldCopyView() {
   /** PDF: slight nudge so COST lines up with html2pdf render. */
   const workSummaryGridClassPdf =
     "grid grid-cols-[minmax(325px,36%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)] gap-x-0 gap-y-1";
-
-  /** Cost totals for SUBTOTAL / TAXABLE rows — aligned under WORK SUMMARY COST column only. */
-  const invoiceCostSubtotal = useMemo(() => {
-    return workSummaryRows.reduce((acc, item) => {
-      if (item.dataType !== "Material" && !(item.totalPrice > 0)) return acc;
-      return acc + getBidStyleWorkSummaryCost(item);
-    }, 0);
-  }, [fieldCopies, workSummaryRows]);
-
-  /**
-   * Cost in the TAXABLE AMOUNT row (COST column): sum of costs for the same lines
-   * that build `taxableAmount` — Normal: non–source-Labor taxable items (summarized
-   * totalCost) + taxable labor rows from laborData; Commercial: full cost subtotal;
-   * Exempt: 0.
-   */
-  const invoiceCostTaxable = useMemo(() => {
-    const customerType = formData?.customerType;
-
-    if (customerType === "Exempt") {
-      return 0;
-    }
-
-    if (customerType === "Commercial") {
-      return invoiceCostSubtotal;
-    }
-
-    const normalizedProjectCode = String(formData?.projectCode || "")
-      .trim()
-      .toUpperCase();
-    if (normalizedProjectCode === "ALAM-409-NB") {
-      let costSum = 0;
-      for (const line of fieldCopies || []) {
-        if (!line || line.status === "Delete") continue;
-        if (String(line?.source || "").toLowerCase() === "labor") continue;
-        if (!line?.isTaxable) continue;
-        costSum += lineItemCostSum(line);
-      }
-      for (const labor of laborData || []) {
-        if (!labor?.isLaborTaxable) continue;
-        costSum += lineItemCostSum(labor);
-      }
-      return costSum;
-    }
-
-    // Normal: same taxable rows as taxableAmount (Work Summary only).
-    let costSum = 0;
-    for (const item of workSummaryRows || []) {
-      const sell = Number(item?.totalPrice) || 0;
-      if (!(sell > 0)) continue;
-      const isRowTaxable =
-        item?.dataType === "Labor"
-          ? taxEq(item?.isLaborTaxable ?? item?.isTaxable, true)
-          : taxEq(item?.isTaxable, true);
-      if (!isRowTaxable) continue;
-      costSum += getBidStyleWorkSummaryCost(item);
-    }
-    return costSum;
-  }, [
-    invoiceCostSubtotal,
-    workSummaryRows,
-    fieldCopies,
-    laborData,
-    formData?.customerType,
-    formData?.projectCode,
-  ]);
 
   function formatAddress(address) {
     return address.replace(/(\d+)/, "\n$1");
@@ -1705,7 +1953,7 @@ export default function OfficeFieldCopyView() {
                                           {item?.size}
                                         </td>
                                         <td className="px-2" style={{ textAlign: "center" }}>
-                                          {qtyText}
+                                          {getBidTableQtyFallback(item, qtyText)}
                                         </td>
                                         <td className="pr-2 tabular-nums" style={{ textAlign: "right" }}>
                                           {lineCost > 0
@@ -1761,7 +2009,7 @@ export default function OfficeFieldCopyView() {
                                         className="px-2"
                                         style={{ textAlign: "center" }}
                                       >
-                                        {item?.quantity ? item.quantity : ""}
+                                        {getBidTableQtyFallback(item)}
                                       </td>
                                       <td
                                         className="pr-2 tabular-nums"
@@ -1796,7 +2044,7 @@ export default function OfficeFieldCopyView() {
                                       >
                                         {displayTotal > 0
                                           ? formatFieldCopyAmount(displayTotal)
-                                          : ""}
+                                            : ""}
                                       </td>
                                     </tr>
                                   );
@@ -1880,7 +2128,7 @@ export default function OfficeFieldCopyView() {
                                     ).toUpperCase()
                                   : `${item.jobType?.toUpperCase() || ""} ${
                                       laborLike
-                                        ? "LABOR"
+                                  ? "LABOR"
                                         : handleInvoiceJobType(item.jobType)
                                     }`.trim()}
                               </b>
@@ -1916,7 +2164,7 @@ export default function OfficeFieldCopyView() {
                             <span className="min-w-0" aria-hidden />
                             <span className="text-end tabular-nums whitespace-nowrap">
                               <b>$</b>{" "}
-                              {item.totalPrice?.toLocaleString("en-US", {
+                              {getBidStyleWorkSummarySell(item).toLocaleString("en-US", {
                                 minimumFractionDigits: 2,
                                 maximumFractionDigits: 2,
                               })}
@@ -2092,12 +2340,7 @@ export default function OfficeFieldCopyView() {
                         <span className="min-w-0" aria-hidden />
                         <span className="text-end tabular-nums whitespace-nowrap">
                           <b>$</b>{" "}
-                          {(
-                            Number(materialsTotal) +
-                            Number(laborTotal) -
-                            (Number(formData.taxCredits) || 0) -
-                            (Number(formData.nonTaxCredits) || 0)
-                          ).toLocaleString("en-US", {
+                          {Number(invoiceSellSubtotal).toLocaleString("en-US", {
                             minimumFractionDigits: 2,
                             maximumFractionDigits: 2,
                           })}
@@ -2160,11 +2403,7 @@ export default function OfficeFieldCopyView() {
                         <span className="min-w-0" aria-hidden />
                         <span className="text-end tabular-nums whitespace-nowrap">
                           <b>$</b>{" "}
-                          {Math.max(
-                            0,
-                            Number(taxableAmount) -
-                              (Number(formData.taxCredits) || 0)
-                          ).toLocaleString("en-US", {
+                          {Number(invoiceSellTaxable).toLocaleString("en-US", {
                             minimumFractionDigits: 2,
                             maximumFractionDigits: 2,
                           })}
@@ -2176,36 +2415,62 @@ export default function OfficeFieldCopyView() {
                       >
                         <span className="col-span-3 min-w-0">
                           SALES TAX
-                          {taxPercent > 0 ? ` (${taxPercent}%)` : ""}
                         </span>
-                        <span className="min-w-0" aria-hidden />
+                        <span className="text-end tabular-nums whitespace-nowrap">
+                          {invoiceSalesTaxOnCost > 0 ? (
+                            <>
+                          <b>$</b>{" "}
+                              {invoiceSalesTaxOnCost.toLocaleString("en-US", {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                              })}
+                            </>
+                          ) : (
+                            ""
+                          )}
+                        </span>
                         <span className="min-w-0" aria-hidden />
                         <span className="min-w-0" aria-hidden />
                         <span className="text-end tabular-nums whitespace-nowrap">
                           <b>$</b>{" "}
                           {invoiceSalesTax.toLocaleString("en-US", {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}
+                          </span>
+                      </div>
+                      <hr />
+                      <div
+                        className={`${workSummaryGridClassPdf} my-2 font-semibold items-baseline uppercase`}
+                      >
+                        <span className="col-span-3 min-w-0">GRAND TOTAL</span>
+                        <span className="text-end tabular-nums whitespace-nowrap">
+                          {invoiceCostGrandTotal > 0 ? (
+                            <>
+                              <b>$</b>{" "}
+                              {invoiceCostGrandTotal.toLocaleString("en-US", {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
+                            </>
+                          ) : (
+                            ""
+                          )}
+                        </span>
+                        <span className="min-w-0" aria-hidden />
+                        <span className="min-w-0" aria-hidden />
+                        <span className="text-end tabular-nums whitespace-nowrap border-b border-black pb-[7px]">
+                          <b>$</b>{" "}
+                          {invoiceSellGrandTotal.toLocaleString("en-US", {
                             minimumFractionDigits: 2,
                             maximumFractionDigits: 2,
                           })}
                         </span>
                       </div>
-                      <hr />
-                      <div className="flex justify-between items-baseline gap-3 my-2">
-                        <span>GRAND TOTAL</span>
-                        <span className="shrink-0 whitespace-nowrap tabular-nums text-end">
-                          <b>$</b>{" "}
-                          <span className="border-b border-black pb-[7px] inline">
-                            {noBidGrandTotal.toLocaleString("en-US", {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })}
-                          </span>
-                        </span>
-                      </div>
                       {billingTypeLower.includes("no bid") &&
                         formData &&
                         formData.taxCredits + formData.nonTaxCredits <=
-                          materialsTotal + laborTotal &&
+                          invoiceSellSubtotal &&
                         !loading &&
                         (formData.taxCredits <= taxableAmount ||
                           !formData.isProjectTaxable) && (
@@ -2451,7 +2716,7 @@ export default function OfficeFieldCopyView() {
                                           {item?.size}
                                         </td>
                                         <td className="px-2" style={{ textAlign: "center" }}>
-                                          {qtyText}
+                                          {getBidTableQtyFallback(item, qtyText)}
                                         </td>
                                         <td className="pr-2 tabular-nums" style={{ textAlign: "right" }}>
                                           {lineCost > 0
@@ -2496,7 +2761,7 @@ export default function OfficeFieldCopyView() {
                                       </td>
                                       <td className="text-center px-2">{item?.size}</td>
                                       <td className="text-center px-2">
-                                        {item?.quantity ? item.quantity : ""}
+                                        {getBidTableQtyFallback(item)}
                                       </td>
                                       <td
                                         className="text-end tabular-nums whitespace-nowrap pr-2"
@@ -2512,8 +2777,8 @@ export default function OfficeFieldCopyView() {
                                       >
                                         {markupVal !== null && markupVal !== undefined && markupVal !== ""
                                           ? Number(markupVal).toLocaleString("en-US", {
-                                              minimumFractionDigits: 0,
-                                              maximumFractionDigits: 2,
+                                            minimumFractionDigits: 0,
+                                            maximumFractionDigits: 2,
                                             }) + "%"
                                           : ""}
                                       </td>
@@ -2531,7 +2796,7 @@ export default function OfficeFieldCopyView() {
                                       >
                                         {displayTotal > 0
                                           ? formatFieldCopyAmount(displayTotal)
-                                          : ""}
+                                            : ""}
                                       </td>
                                     </tr>
                                   );
@@ -2594,7 +2859,7 @@ export default function OfficeFieldCopyView() {
                                   ).toUpperCase()
                                 : `${item.jobType?.toUpperCase() || ""} ${
                                     laborLike
-                                      ? "LABOR"
+                                ? "LABOR"
                                       : handleInvoiceJobType(item.jobType)
                                   }`.trim()}
                             </b>
@@ -2631,7 +2896,7 @@ export default function OfficeFieldCopyView() {
                           <span className="min-w-0" aria-hidden />
                           <span className="justify-self-end text-end tabular-nums whitespace-nowrap">
                             <b>$</b>{" "}
-                            {item.totalPrice?.toLocaleString("en-US", {
+                            {getBidStyleWorkSummarySell(item).toLocaleString("en-US", {
                               minimumFractionDigits: 2,
                               maximumFractionDigits: 2,
                             })}
@@ -2698,7 +2963,7 @@ export default function OfficeFieldCopyView() {
                           <span className="min-w-0" aria-hidden />
                           <span className="justify-self-end text-end tabular-nums whitespace-nowrap">
                             <b>$</b>{" "}
-                            {item.totalPrice?.toLocaleString("en-US", {
+                            {getBidStyleWorkSummarySell(item).toLocaleString("en-US", {
                               minimumFractionDigits: 2,
                               maximumFractionDigits: 2,
                             })}
@@ -2813,12 +3078,7 @@ export default function OfficeFieldCopyView() {
                     <span className="min-w-0" aria-hidden />
                     <span className="justify-self-end text-end tabular-nums whitespace-nowrap">
                       <b>$</b>{" "}
-                      {(
-                        Number(materialsTotal) +
-                        Number(laborTotal) -
-                        (Number(formData.taxCredits) || 0) -
-                        (Number(formData.nonTaxCredits) || 0)
-                      ).toLocaleString("en-US", {
+                      {Number(invoiceSellSubtotal).toLocaleString("en-US", {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}
@@ -2846,11 +3106,65 @@ export default function OfficeFieldCopyView() {
                     <span className="min-w-0" aria-hidden />
                     <span className="justify-self-end text-end tabular-nums whitespace-nowrap">
                       <b>$</b>{" "}
-                      {Math.max(
-                        0,
-                        Number(taxableAmount) -
-                          (Number(formData.taxCredits) || 0)
-                      ).toLocaleString("en-US", {
+                      {Number(invoiceSellTaxable).toLocaleString("en-US", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </span>
+                  </div>
+                  <hr className="my-2 border-neutral-300" />
+                  <div
+                    className={`${workSummaryGridClass} my-2 items-baseline uppercase`}
+                  >
+                    <span className="col-span-3 min-w-0">
+                      SALES TAX
+                    </span>
+                    <span className="justify-self-end text-end tabular-nums whitespace-nowrap">
+                      {invoiceSalesTaxOnCost > 0 ? (
+                        <>
+                          <b>$</b>{" "}
+                          {invoiceSalesTaxOnCost.toLocaleString("en-US", {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
+                        </>
+                      ) : (
+                        ""
+                      )}
+                    </span>
+                    <span className="min-w-0" aria-hidden />
+                    <span className="min-w-0" aria-hidden />
+                    <span className="justify-self-end text-end tabular-nums whitespace-nowrap">
+                      <b>$</b>{" "}
+                      {invoiceSalesTax.toLocaleString("en-US", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </span>
+                  </div>
+                  <hr className="my-2 border-neutral-300" />
+                  <div
+                    className={`${workSummaryGridClass} my-2 font-semibold items-baseline uppercase`}
+                  >
+                    <span className="col-span-3 min-w-0">Grand Total</span>
+                    <span className="justify-self-end text-end tabular-nums whitespace-nowrap">
+                      {invoiceCostGrandTotal > 0 ? (
+                        <>
+                          <b>$</b>{" "}
+                          {invoiceCostGrandTotal.toLocaleString("en-US", {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
+                        </>
+                      ) : (
+                        ""
+                      )}
+                    </span>
+                    <span className="min-w-0" aria-hidden />
+                    <span className="min-w-0" aria-hidden />
+                    <span className="justify-self-end text-end tabular-nums whitespace-nowrap">
+                      <b>$</b>{" "}
+                      {invoiceSellGrandTotal.toLocaleString("en-US", {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}
@@ -2868,65 +3182,12 @@ export default function OfficeFieldCopyView() {
 
                 {formData &&
                   formData.taxCredits + formData.nonTaxCredits <=
-                  materialsTotal + laborTotal ? (
+                  invoiceSellSubtotal ? (
                   !loading ? (
                     formData && formData.taxCredits <= taxableAmount ? (
                       <div className="">
                         <div className="w-full mt-0 text-[15px]">
                           <div className="">
-                            <hr />
-                            <div className="flex justify-between my-2">
-                              <span>Taxable Amount</span>
-                              <span>
-                                <b>$</b>{" "}
-                                {formData.isProjectTaxable
-                                  ? (
-                                    (taxPercent *
-                                      (taxableAmount - formData.taxCredits)) /
-                                    100
-                                  )?.toLocaleString("en-US", {
-                                    minimumFractionDigits: 2,
-                                    maximumFractionDigits: 2,
-                                  })
-                                  : (
-                                    (taxPercent * taxableAmount) /
-                                    100
-                                  )?.toLocaleString("en-US", {
-                                    minimumFractionDigits: 2,
-                                    maximumFractionDigits: 2,
-                                  })}
-                              </span>
-                            </div>
-                            <hr />
-                            <div className="flex justify-between my-2">
-                              <span>Grand Total</span>
-                              <span>
-                                <b>$</b>{" "}
-                                {formData.isProjectTaxable
-                                  ? (
-                                    (taxPercent *
-                                      (taxableAmount - formData.taxCredits)) /
-                                    100 +
-                                    (materialsTotal +
-                                      laborTotal -
-                                      (formData.taxCredits +
-                                        formData.nonTaxCredits))
-                                  )?.toLocaleString("en-US", {
-                                    minimumFractionDigits: 2,
-                                    maximumFractionDigits: 2,
-                                  })
-                                  : (
-                                    (taxPercent * taxableAmount) / 100 +
-                                    (materialsTotal +
-                                      laborTotal -
-                                      (formData.taxCredits +
-                                        formData.nonTaxCredits))
-                                  )?.toLocaleString("en-US", {
-                                    minimumFractionDigits: 2,
-                                    maximumFractionDigits: 2,
-                                  })}
-                              </span>
-                            </div>
                           </div>
                         </div>
                       </div>
@@ -2938,50 +3199,7 @@ export default function OfficeFieldCopyView() {
                             amount.
                           </div>
                         ) : (
-                          <div className="">
-                            <hr />
-                            <div className="flex justify-between my-2">
-                              <span>Taxable Amount</span>
-                              <span>
-                                <b>$</b>{" "}
-                                {0?.toLocaleString("en-US", {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                })}
-                              </span>
-                            </div>
-                            <hr />
-
-                            <div className="flex justify-between my-2">
-                              <span>Grand Total</span>
-                              <span>
-                                <b>$</b>{" "}
-                                {formData.isProjectTaxable
-                                  ? (
-                                    (taxPercent *
-                                      (taxableAmount - formData.taxCredits)) /
-                                    100 +
-                                    (materialsTotal +
-                                      laborTotal -
-                                      (formData.taxCredits +
-                                        formData.nonTaxCredits))
-                                  )?.toLocaleString("en-US", {
-                                    minimumFractionDigits: 2,
-                                    maximumFractionDigits: 2,
-                                  })
-                                  : (
-                                    0 / 100 +
-                                    (materialsTotal +
-                                      laborTotal -
-                                      (formData.taxCredits +
-                                        formData.nonTaxCredits))
-                                  )?.toLocaleString("en-US", {
-                                    minimumFractionDigits: 2,
-                                    maximumFractionDigits: 2,
-                                  })}
-                              </span>
-                            </div>
-                          </div>
+                          <div className="" />
                         )}
                       </>
                     )
@@ -3001,7 +3219,7 @@ export default function OfficeFieldCopyView() {
 
                 {formData &&
                   formData.taxCredits + formData.nonTaxCredits <=
-                    materialsTotal + laborTotal &&
+                    invoiceSellSubtotal &&
                   !loading &&
                   (formData.taxCredits <= taxableAmount ||
                     !formData.isProjectTaxable) && (
@@ -3086,7 +3304,7 @@ export default function OfficeFieldCopyView() {
                   className={`bg-[#00613e] text-white py-1 px-6 md:mr-4 mr-0 ${(formData &&
                     formData.taxCredits > taxableAmount &&
                     formData.isProjectTaxable) ||
-                    materialsTotal + laborTotal <
+                  invoiceSellSubtotal <
                     formData.taxCredits + formData.nonTaxCredits
                     ? "cursor-not-allowed"
                     : "cursor-pointer"
@@ -3099,7 +3317,7 @@ export default function OfficeFieldCopyView() {
                     (formData &&
                       formData.taxCredits > taxableAmount &&
                       formData.isProjectTaxable) ||
-                    materialsTotal + laborTotal <
+                  invoiceSellSubtotal <
                     formData.taxCredits + formData.nonTaxCredits
                   }
                 >

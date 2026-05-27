@@ -340,6 +340,27 @@ export default function ViewFieldCopyByDate() {
     return x === y;
   };
 
+  const isFieldCopyWorkSummaryLineTaxableRt = (item, labor) => {
+    const customerType = formData?.customerType;
+    if (customerType === "Exempt") return false;
+    if (customerType === "Commercial") {
+      return taxEq(labor?.isLaborTaxable ?? labor?.isTaxable, true);
+    }
+    if (labor) {
+      return taxEq(labor?.isLaborTaxable ?? labor?.isTaxable, true);
+    }
+    if (["Labor", "Other"].includes(item?.source)) {
+      return taxEq(item?.isTaxable, true);
+    }
+    if (["Lump Sum"].includes(item?.source)) {
+      return taxEq(item?.isTaxable, true);
+    }
+    if (item?.dataType === "Material" || item?.dataType !== "Labor") {
+      return true;
+    }
+    return taxEq(item?.isLaborTaxable ?? item?.isTaxable, true);
+  };
+
   const jobTypeMatch = (a, b) =>
     String(a ?? "")
       .trim()
@@ -641,7 +662,51 @@ export default function ViewFieldCopyByDate() {
     } else if (formData.customerType === "Exempt") {
       setTaxableAmount(0);
     }
-  }, [categorizedFieldCopies, formData]);
+  }, [categorizedFieldCopies, formData, laborData, materialsTotal]);
+
+  /** Sell amount tax is calculated on (PDF / download footer). */
+  const pdfTaxableBase = useMemo(() => {
+    if (formData?.customerType === "Exempt") return 0;
+    const base = Number(taxableAmount) || 0;
+    const tc = Number(formData?.taxCredits) || 0;
+    if (formData?.isProjectTaxable) {
+      return Math.max(0, base - tc);
+    }
+    if (tc > base) return 0;
+    return base;
+  }, [
+    taxableAmount,
+    formData?.taxCredits,
+    formData?.isProjectTaxable,
+    formData?.customerType,
+  ]);
+
+  const pdfSalesTax = useMemo(() => {
+    const pct = Number(taxPercent) || 0;
+    if (!(pct > 0)) return 0;
+    return (pct * pdfTaxableBase) / 100;
+  }, [taxPercent, pdfTaxableBase]);
+
+  const pdfSubtotalSell = useMemo(() => {
+    const tc = Number(formData?.taxCredits) || 0;
+    const ntc = Number(formData?.nonTaxCredits) || 0;
+    return (
+      (Number(materialsTotal) || 0) +
+      (Number(laborTotal) || 0) -
+      tc -
+      ntc
+    );
+  }, [
+    materialsTotal,
+    laborTotal,
+    formData?.taxCredits,
+    formData?.nonTaxCredits,
+  ]);
+
+  const pdfGrandTotal = useMemo(
+    () => pdfSubtotalSell + pdfSalesTax,
+    [pdfSubtotalSell, pdfSalesTax]
+  );
 
   useEffect(() => {
     const pm = allCrews.filter((item) => {
@@ -1228,6 +1293,93 @@ export default function ViewFieldCopyByDate() {
     materialLaborData,
     formData?.jobType,
     fieldCopyDownloadCrewManHours,
+  ]);
+
+  const fieldCopyPdfWorkSummaryTotals = useMemo(() => {
+    let costSubtotal = 0;
+    let sellSubtotal = 0;
+    let taxableCost = 0;
+    let taxableSell = 0;
+
+    for (const item of fieldCopyPdfWorkSummaryMaterials) {
+      const rowCost = getFieldCopyWorkSummaryMaterialCost(item);
+      const sell = Number(item?.totalPrice) || 0;
+      costSubtotal += rowCost;
+      sellSubtotal += sell;
+      if (isFieldCopyWorkSummaryLineTaxableRt(item)) {
+        taxableCost += rowCost;
+        taxableSell += sell;
+      }
+    }
+
+    for (const { labor, row } of fieldCopyPdfCrewWorkSummaryRows) {
+      const rowCost = Number(row?.lineCost) || 0;
+      const sell = Number(row?.displayTotal) || 0;
+      costSubtotal += rowCost;
+      sellSubtotal += sell;
+      if (isFieldCopyWorkSummaryLineTaxableRt(null, labor)) {
+        taxableCost += rowCost;
+        taxableSell += sell;
+      }
+    }
+
+    return { costSubtotal, sellSubtotal, taxableCost, taxableSell };
+  }, [
+    fieldCopyPdfWorkSummaryMaterials,
+    fieldCopyPdfCrewWorkSummaryRows,
+    fieldCopyEntryLineItems,
+    fieldCopies,
+    formData?.customerType,
+    formData?.jobType,
+  ]);
+
+  const pdfCostTaxable = useMemo(() => {
+    if (formData?.customerType === "Exempt") return 0;
+    if (formData?.customerType === "Commercial") {
+      return fieldCopyPdfWorkSummaryTotals.costSubtotal;
+    }
+    return fieldCopyPdfWorkSummaryTotals.taxableCost;
+  }, [fieldCopyPdfWorkSummaryTotals, formData?.customerType]);
+
+  const pdfSalesTaxOnCost = useMemo(() => {
+    const tc = Number(formData?.taxCredits) || 0;
+    const base = Number(pdfCostTaxable) || 0;
+    if (formData?.isProjectTaxable) {
+      return (taxPercent * Math.max(0, base - tc)) / 100;
+    }
+    if (tc > base) return 0;
+    return (taxPercent * base) / 100;
+  }, [
+    formData?.isProjectTaxable,
+    formData?.taxCredits,
+    taxPercent,
+    pdfCostTaxable,
+  ]);
+
+  const pdfCostNetSubtotal = useMemo(() => {
+    const tc = Number(formData?.taxCredits) || 0;
+    const ntc = Number(formData?.nonTaxCredits) || 0;
+    return fieldCopyPdfWorkSummaryTotals.costSubtotal - tc - ntc;
+  }, [
+    fieldCopyPdfWorkSummaryTotals,
+    formData?.taxCredits,
+    formData?.nonTaxCredits,
+  ]);
+
+  const pdfCostGrandTotal = useMemo(
+    () => pdfCostNetSubtotal + pdfSalesTaxOnCost,
+    [pdfCostNetSubtotal, pdfSalesTaxOnCost]
+  );
+
+  const pdfSellTaxableDisplay = useMemo(() => {
+    if (formData?.customerType === "Exempt") return 0;
+    const fromLines = fieldCopyPdfWorkSummaryTotals.taxableSell;
+    if (fromLines > 0) return fromLines;
+    return pdfTaxableBase;
+  }, [
+    fieldCopyPdfWorkSummaryTotals,
+    pdfTaxableBase,
+    formData?.customerType,
   ]);
 
   function convertMillisecondsToDate(ms) {
@@ -2125,49 +2277,63 @@ const handleInvoiceJobType = (jobType) => {
                   </>
                 )}
                 <hr />
-                {/* COST & MARKUP summary (Office Copy jaisa) */}
+                {/* COST & MARKUP summary — COST + $ columns (Office Copy jaisa) */}
                 {cost !== null && cost !== undefined && (
-                  <div className="flex justify-between my-2">
-                    <span>COST</span>
-                    <span>
+                  <div
+                    className={`${workSummaryGridClass} my-2 items-baseline uppercase`}
+                  >
+                    <span className="col-span-3 min-w-0">COST</span>
+                    <span className="min-w-0" aria-hidden />
+                    <span className="min-w-0" aria-hidden />
+                    <span className="min-w-0" aria-hidden />
+                    <span className="text-end tabular-nums whitespace-nowrap">
                       <b>$</b>{" "}
-                      <span className="inline-block w-[80px] text-end">
-                        {cost.toLocaleString("en-US", {
+                      {fieldCopyPdfWorkSummaryTotals.costSubtotal.toLocaleString(
+                        "en-US",
+                        {
                           minimumFractionDigits: 2,
                           maximumFractionDigits: 2,
-                        })}
-                      </span>
+                        }
+                      )}
                     </span>
                   </div>
                 )}
                 {markup !== null && markup !== undefined && (
-                  <div className="flex justify-between my-2">
-                    <span>MARKUP</span>
-                    <span>
-                      <span className="inline-block w-[80px] text-end">
-                        {markup.toLocaleString("en-US", {
-                          minimumFractionDigits: 0,
-                          maximumFractionDigits: 2,
-                        })}
-                        %
-                      </span>
+                  <div
+                    className={`${workSummaryGridClass} my-2 items-baseline uppercase`}
+                  >
+                    <span className="col-span-3 min-w-0">MARKUP</span>
+                    <span className="min-w-0" aria-hidden />
+                    <span className="min-w-0" aria-hidden />
+                    <span className="min-w-0" aria-hidden />
+                    <span className="text-end tabular-nums whitespace-nowrap">
+                      {markup.toLocaleString("en-US", {
+                        minimumFractionDigits: 0,
+                        maximumFractionDigits: 2,
+                      })}
+                      %
                     </span>
                   </div>
                 )}
-                <div className="flex justify-between my-2">
-                  <span>SUBTOTAL</span>
-                  <span>
+                <div
+                  className={`${workSummaryGridClass} my-2 items-baseline uppercase`}
+                >
+                  <span className="col-span-3 min-w-0">SUBTOTAL</span>
+                  <span className="text-end tabular-nums whitespace-nowrap">
                     <b>$</b>{" "}
-                    <span className="inline-block w-[80px] text-end">
-                      {(
-                        materialsTotal +
-                        laborTotal -
-                        (formData.taxCredits + formData.nonTaxCredits)
-                      )?.toLocaleString("en-US", {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}
-                    </span>
+                    {pdfCostNetSubtotal.toLocaleString("en-US", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </span>
+                  <span className="min-w-0" aria-hidden />
+                  <span className="min-w-0" aria-hidden />
+                  <span className="text-end tabular-nums whitespace-nowrap">
+                    <b>$</b>{" "}
+                    {pdfSubtotalSell.toLocaleString("en-US", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
                   </span>
                 </div>
                 {/* <hr />
@@ -2204,65 +2370,75 @@ const handleInvoiceJobType = (jobType) => {
                     )} */}
                 <hr />
 
-                <div className="flex justify-between my-2">
-                  <span>TAXABLE AMOUNT</span>
-                  <span>
+                <div
+                  className={`${workSummaryGridClass} my-2 items-baseline uppercase`}
+                >
+                  <span className="col-span-3 min-w-0">TAXABLE AMOUNT</span>
+                  <span className="text-end tabular-nums whitespace-nowrap">
                     <b>$</b>{" "}
-                    {formData.isProjectTaxable ? (
-                      <span className="inline-block w-[80px] text-end">
-                        {(
-                          (taxPercent * (taxableAmount - formData.taxCredits)) /
-                          100
-                        )?.toLocaleString("en-US", {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}
-                      </span>
-                    ) : (
-                      <span className="inline-block w-[80px] text-end">
-                        {formData.taxCredits > taxableAmount
-                          ? 0
-                          : (
-                            (taxPercent * taxableAmount) /
-                            100
-                          )?.toLocaleString("en-US", {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                      </span>
-                    )}
+                    {pdfCostTaxable.toLocaleString("en-US", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </span>
+                  <span className="min-w-0" aria-hidden />
+                  <span className="min-w-0" aria-hidden />
+                  <span className="text-end tabular-nums whitespace-nowrap">
+                    <b>$</b>{" "}
+                    {pdfSellTaxableDisplay.toLocaleString("en-US", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
                   </span>
                 </div>
                 <hr />
-                <div className="flex justify-between my-2">
-                  <span>GRAND TOTAL</span>
-                  <span>
+                <div
+                  className={`${workSummaryGridClass} my-2 items-baseline uppercase`}
+                >
+                  <span className="col-span-3 min-w-0">SALES TAX</span>
+                  <span className="text-end tabular-nums whitespace-nowrap">
                     <b>$</b>{" "}
-                    <span className="inline-block w-[80px] text-end">
-                      <span className="border-b border-black pb-[7px]">
-                        {formData.isProjectTaxable
-                          ? (
-                            (taxPercent *
-                              (taxableAmount - formData.taxCredits)) /
-                            100 +
-                            (materialsTotal +
-                              laborTotal -
-                              (formData.taxCredits + formData.nonTaxCredits))
-                          )?.toLocaleString("en-US", {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })
-                          : (
-                            (taxPercent * taxableAmount) / 100 +
-                            (materialsTotal +
-                              laborTotal -
-                              (formData.taxCredits + formData.nonTaxCredits))
-                          )?.toLocaleString("en-US", {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                      </span>
-                    </span>
+                    {pdfSalesTaxOnCost.toLocaleString("en-US", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </span>
+                  <span className="min-w-0" aria-hidden />
+                  <span className="min-w-0" aria-hidden />
+                  <span className="text-end tabular-nums whitespace-nowrap">
+                    <b>$</b>{" "}
+                    {pdfSalesTax.toLocaleString("en-US", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </span>
+                </div>
+                <hr />
+                <div
+                  className={`${workSummaryGridClass} my-2 font-semibold items-baseline uppercase`}
+                >
+                  <span className="col-span-3 min-w-0">GRAND TOTAL</span>
+                  <span className="text-end tabular-nums whitespace-nowrap">
+                    {pdfCostGrandTotal > 0 ? (
+                      <>
+                        <b>$</b>{" "}
+                        {pdfCostGrandTotal.toLocaleString("en-US", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </>
+                    ) : (
+                      ""
+                    )}
+                  </span>
+                  <span className="min-w-0" aria-hidden />
+                  <span className="min-w-0" aria-hidden />
+                  <span className="text-end tabular-nums whitespace-nowrap border-b border-black pb-[7px]">
+                    <b>$</b>{" "}
+                    {pdfGrandTotal.toLocaleString("en-US", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
                   </span>
                 </div>
               </div>

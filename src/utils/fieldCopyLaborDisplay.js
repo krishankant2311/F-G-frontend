@@ -86,6 +86,94 @@ export function shouldSkipAggregatedLaborPdfRow(labor, groupItems, fieldCopies) 
   );
 }
 
+/** Label like "HARDSCAPE LUMP SUM LABOR" — not shown on no-bid office copy table. */
+export function isLumpSumLaborLabel(text) {
+  const s = String(text || "")
+    .trim()
+    .toUpperCase();
+  return s.includes("LUMP SUM") && s.includes("LABOR");
+}
+
+/** Field-copy / summarized table row that represents lump-sum labor (duplicate of crew row). */
+export function isLumpSumLaborFieldCopyItem(item) {
+  if (!item) return false;
+  const ref = String(item.reference || item.description || "").trim();
+  if (isLumpSumLaborLabel(ref)) return true;
+  const src = String(item.source || "").toUpperCase();
+  const type = String(item.type || "").toUpperCase();
+  if (src.includes("LUMP SUM") && (ref.toUpperCase().includes("LABOR") || type.includes("LABOR"))) {
+    return true;
+  }
+  return false;
+}
+
+/** Crew labor entry whose job type resolves to a lump-sum labor label. */
+export function isLumpSumLaborCrewEntry(labor, formDataJobType) {
+  if (!labor) return false;
+  const jt = String(labor.jobType || "").toUpperCase();
+  if (jt.includes("LUMP SUM")) return true;
+  const label = resolveFieldCopyDisplayJobType({
+    jobType: labor.jobType,
+    formDataJobType,
+  });
+  return isLumpSumLaborLabel(label ? `${label} LABOR` : "");
+}
+
+/** Source=Labor contractor line (e.g. LANDSCAPE LABOR (DEANS STUMP REMOVAL)). */
+export function isContractorSourceLaborSummaryRow(item) {
+  if (!item || String(item?.source || "") !== "Labor") return false;
+  const vendor = String(item?.vendorName || item?.vendor || "").trim();
+  if (vendor) return true;
+  const typeStr = String(item?.type || "").toLowerCase();
+  if (typeStr.includes("contract")) return true;
+  const ref = String(item?.reference || item?.description || "").toUpperCase();
+  if (!ref.includes("LABOR")) return false;
+  const parenChunks = ref.match(/\(([^)]+)\)/g) || [];
+  return parenChunks.some((chunk) => {
+    const inner = chunk.slice(1, -1).trim();
+    return inner && inner !== "CONTRACTOR" && inner !== "F&G";
+  });
+}
+
+/**
+ * Hide contractor Source=Labor from Work Summary when crew labor exists for same job type
+ * (Materials table still shows the line; summary shows JOB TYPE LABOR only).
+ */
+function workSummaryRowJobTypeKey(item) {
+  const fromField = normalizeJobTypeKey(item?.jobType || item?.type);
+  if (fromField) return fromField;
+  const ref = String(item?.reference || item?.description || "").toUpperCase();
+  const m = ref.match(/^([A-Z][A-Z\s]*?)\s+LABOR\b/);
+  if (m) return normalizeJobTypeKey(m[1]);
+  return "";
+}
+
+export function shouldHideContractorLaborWorkSummaryRow(
+  item,
+  { laborData, fieldLaborData, laborManHoursByJobType } = {}
+) {
+  if (!isContractorSourceLaborSummaryRow(item)) return false;
+  const key = workSummaryRowJobTypeKey(item);
+  if (!key) return false;
+
+  const jobTypeMatches = (l) => normalizeJobTypeKey(l?.jobType) === key;
+
+  for (const l of laborData || []) {
+    if (!jobTypeMatches(l)) continue;
+    if (Number(l?.totalPrice) > 0) return true;
+  }
+  for (const l of fieldLaborData || []) {
+    if (!jobTypeMatches(l)) continue;
+    if (Number(l?.manHours) > 0 || Number(l?.totalPrice) > 0) return true;
+  }
+  if (laborManHoursByJobType && typeof laborManHoursByJobType === "object") {
+    for (const [jt, h] of Object.entries(laborManHoursByJobType)) {
+      if (normalizeJobTypeKey(jt) === key && Number(h) > 0) return true;
+    }
+  }
+  return false;
+}
+
 /** Field Copy PDF — Labor unit price (Add Field Copy formula, not 4× view logic). */
 export function getFieldCopyLaborLineDisplayPrice(item) {
   if (!item) return null;
