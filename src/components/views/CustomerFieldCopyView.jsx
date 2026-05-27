@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import Layout from "../layout/Layout";
 import axios from "axios";
 import { ToastContainer, toast } from "react-toastify";
@@ -12,6 +12,18 @@ import {
   finalizeLaborSummaryRow,
   materialNameBaseForEdit,
 } from "../../utils/materialReference";
+import {
+  getOfficeFieldCopyCrewLaborRowFields,
+  getOfficeFieldCopyLineCost,
+  getOfficeFieldCopyRowCalculations,
+  lookupJobTypeCatalogRate,
+  lookupLaborMapValue,
+  mergeLaborMapMissingKeys,
+  normalizeJobTypeKey,
+  resolveFieldCopyCrewUnitRate,
+  resolveFieldCopyDisplayJobType,
+  resolveOfficeFieldCopyGroupJobType,
+} from "../../utils/fieldCopyLaborDisplay";
 
 export default function CustomerFieldCopyView() {
   const [formData, setFormData] = useState({
@@ -47,6 +59,7 @@ export default function CustomerFieldCopyView() {
   const [loading, setLoading] = useState(false);
   const [laborTotal, setLaborTotal] = useState(0);
   const [fieldLaborData, SetFieldLaborData] = useState([]);
+  const [jobTypesCatalog, setJobTypesCatalog] = useState([]);
   const [materialsTotal, setMaterialsTotal] = useState(0);
   const [taxPercent, setTaxPercent] = useState(0);
   const [taxableAmount, setTaxableAmount] = useState(0);
@@ -65,63 +78,164 @@ export default function CustomerFieldCopyView() {
   const navigate = useNavigate();
   const { tableSize } = useTableContext();
 
-  const laborHourlyRateByJobType = useMemo(() => {
-    const map = {};
-    const pushFromGroups = (groups) => {
-      if (!Array.isArray(groups)) return;
-      for (const g of groups) {
-        const jt = String(g?.jobType || "").trim().toUpperCase();
-        if (!jt) continue;
-        const directRate = Number(g?.jobTypeCost || 0);
-        const derivedRate =
-          Number(g?.manHours || 0) > 0
-            ? Number(g?.totalCost || 0) / Number(g.manHours)
-            : 0;
-        const rate = directRate > 0 ? directRate : derivedRate > 0 ? derivedRate : 0;
-        if (rate > 0 && (!map[jt] || map[jt] <= 0)) {
-          map[jt] = rate;
-        }
-      }
-    };
-    if (Array.isArray(formData?.officeFieldCopy)) {
-      for (const entry of formData.officeFieldCopy) {
-        pushFromGroups(entry?.fieldCopies);
-      }
-    }
-    return map;
-  }, [formData?.officeFieldCopy]);
+  const buildOfficeLaborMaps = useCallback(
+    (filterByEntryDate) => {
+      const hoursMap = {};
+      const rateMap = {};
+      const catalogOpts = { jobTypesCatalog };
 
-  const laborManHoursByJobType = useMemo(() => {
-    const map = {};
-    const pushFromGroups = (groups) => {
-      if (!Array.isArray(groups)) return;
-      for (const g of groups) {
-        const jt = String(g?.jobType || "").trim().toUpperCase();
+      const pushFromGroups = (groups) => {
+        if (!Array.isArray(groups)) return;
+        for (const g of groups) {
+          const jt = resolveOfficeFieldCopyGroupJobType(g, catalogOpts);
+          if (!jt) continue;
+          const h = Number(g?.manHours || 0);
+          if (h > 0) hoursMap[jt] = (hoursMap[jt] || 0) + h;
+          const directRate = Number(g?.jobTypeCost || 0);
+          const derivedRate =
+            h > 0 ? Number(g?.totalCost || 0) / h : 0;
+          const rate =
+            directRate > 0 ? directRate : derivedRate > 0 ? derivedRate : 0;
+          if (rate > 0 && (!(rateMap[jt] > 0) || rateMap[jt] <= 0)) {
+            rateMap[jt] = rate;
+          }
+        }
+      };
+
+      const wantDate = String(entryDate || "").trim();
+      const pushOfficeEntries = (entries, applyDateFilter) => {
+        if (!Array.isArray(entries)) return;
+        for (const entry of entries) {
+          if (applyDateFilter && wantDate) {
+            const entryKey = String(entry?.entryDate || "").trim();
+            if (entryKey && entryKey !== wantDate) continue;
+          }
+          pushFromGroups(entry?.fieldCopies);
+        }
+      };
+
+      pushOfficeEntries(formData?.officeFieldCopy, filterByEntryDate);
+      pushOfficeEntries(
+        formData?.draftCopy?.map((d) => ({
+          entryDate: d?.entryDate,
+          fieldCopies: d?.draftCopies,
+        })),
+        filterByEntryDate
+      );
+
+      for (const labor of fieldLaborData || []) {
+        const jt = resolveFieldCopyDisplayJobType({
+          jobType: labor?.jobType,
+          formDataJobType: formData?.jobType,
+        });
         if (!jt) continue;
-        const h = Number(g?.manHours || 0);
-        if (h > 0) {
-          map[jt] = (map[jt] || 0) + h;
+        const h =
+          Number(labor?.manHours) > 0
+            ? Number(labor.manHours)
+            : Number(labor?.quantity) > 0
+              ? Number(labor.quantity)
+              : 0;
+        if (h > 0) hoursMap[jt] = (hoursMap[jt] || 0) + h;
+      }
+
+      for (const jt of Object.keys(hoursMap)) {
+        if (!(rateMap[jt] > 0)) {
+          const catalogRate = lookupJobTypeCatalogRate(jobTypesCatalog, jt);
+          if (catalogRate > 0) rateMap[jt] = catalogRate;
         }
       }
+
+      return { hoursMap, rateMap };
+    },
+    [
+      entryDate,
+      fieldLaborData,
+      formData?.draftCopy,
+      formData?.jobType,
+      formData?.officeFieldCopy,
+      jobTypesCatalog,
+    ]
+  );
+
+  const { laborHourlyRateByJobType, laborManHoursByJobType } = useMemo(() => {
+    const forDate = buildOfficeLaborMaps(true);
+    const allDates = buildOfficeLaborMaps(false);
+    return {
+      laborHourlyRateByJobType: mergeLaborMapMissingKeys(
+        forDate.rateMap,
+        allDates.rateMap
+      ),
+      laborManHoursByJobType: mergeLaborMapMissingKeys(
+        forDate.hoursMap,
+        allDates.hoursMap
+      ),
     };
-    if (Array.isArray(formData?.officeFieldCopy)) {
-      for (const entry of formData.officeFieldCopy) {
-        pushFromGroups(entry?.fieldCopies);
+  }, [buildOfficeLaborMaps]);
+
+  const findLaborRateForJobType = useCallback(
+    (jt) => {
+      if (!jt) return 0;
+      const fromMap = lookupLaborMapValue(laborHourlyRateByJobType, jt);
+      if (fromMap > 0) return fromMap;
+
+      const fromCatalog = lookupJobTypeCatalogRate(jobTypesCatalog, jt);
+      if (fromCatalog > 0) return fromCatalog;
+
+      const jtKey = normalizeJobTypeKey(jt);
+      for (const group of categorizedFieldCopies) {
+        for (const item of group?.items || []) {
+          const itemJt = resolveFieldCopyDisplayJobType({
+            jobType: item?.jobType || item?.type,
+            formDataJobType: formData?.jobType,
+          });
+          if (normalizeJobTypeKey(itemJt) !== jtKey) continue;
+          const rate = resolveFieldCopyCrewUnitRate(item);
+          if (rate > 0) return rate;
+          const row = getOfficeFieldCopyRowCalculations(item);
+          if (row.displayPrice > 0) return row.displayPrice;
+        }
       }
-    }
-    return map;
-  }, [formData?.officeFieldCopy]);
+
+      for (const item of laborData || []) {
+        const itemJt = resolveFieldCopyDisplayJobType({
+          jobType: item?.jobType,
+          formDataJobType: formData?.jobType,
+        });
+        if (normalizeJobTypeKey(itemJt) !== jtKey) continue;
+        const rate = resolveFieldCopyCrewUnitRate(item);
+        if (rate > 0) return rate;
+      }
+
+      const hrs = lookupLaborMapValue(laborManHoursByJobType, jt);
+      for (const l of fieldLaborData || []) {
+        const ljt = resolveFieldCopyDisplayJobType({
+          jobType: l?.jobType,
+          formDataJobType: formData?.jobType,
+        });
+        if (normalizeJobTypeKey(ljt) !== jtKey) continue;
+        const total = Number(l?.totalPrice) || 0;
+        if (total > 0 && hrs > 0) return total / hrs;
+        const rate = resolveFieldCopyCrewUnitRate(l);
+        if (rate > 0) return rate;
+      }
+      return 0;
+    },
+    [
+      laborHourlyRateByJobType,
+      laborManHoursByJobType,
+      categorizedFieldCopies,
+      laborData,
+      fieldLaborData,
+      formData?.jobType,
+      jobTypesCatalog,
+    ]
+  );
 
   console.log("Data -----------", fieldLaborData, categorizedFieldCopies);
 
   const downloadPdf = () => {
     const element = document.getElementById("content-to-pdf");
-
-    // Create a temporary div with the hidden content
-    const tempDiv = document.createElement("div");
-
-    // Insert the temporary div at the top of the content
-    element.prepend(tempDiv);
+    const pdfWrapper = element?.parentElement;
 
     const fileName = documentName + ".pdf";
 
@@ -134,6 +248,14 @@ export default function CustomerFieldCopyView() {
       // pagebreak: { mode: ["avoid-all", "css", "legacy"] }, // Ensures proper page breaks
       pagebreak: { mode: 'avoid-all', before: '#page2el' }
     };
+
+    const prevWrapperStyle = pdfWrapper?.getAttribute("style") || "";
+    if (pdfWrapper) {
+      pdfWrapper.setAttribute(
+        "style",
+        "position:fixed;left:-12000px;top:0;width:800px;display:block;visibility:visible;opacity:1;"
+      );
+    }
 
     html2pdf()
       .from(element)
@@ -170,60 +292,39 @@ Approved by: __________________  Date: ____________________`,
         // Save the PDF with the footer added
         pdf.save(fileName);
       })
-      .then(() => {
-        // Ensure the temporary div is removed after the download completes
-        tempDiv.remove();
-      })
       .catch((error) => {
         console.error("PDF generation failed:", error);
-        tempDiv.remove(); // Ensure cleanup even if an error occurs
+      })
+      .finally(() => {
+        if (pdfWrapper) {
+          pdfWrapper.setAttribute("style", prevWrapperStyle || "display: none;");
+        }
       });
   };
 
   useEffect(() => {
-    let taxAmount = 0;
-    if (
-      categorizedFieldCopies &&
-      categorizedFieldCopies[0] &&
-      categorizedFieldCopies[0]?.items?.length > 0
-    ) {
-      // console.log("ITEMS", categorizedFieldCopies[0].items)
-      for (let type of categorizedFieldCopies[0].items) {
-        if (type.source === "Labor") {
-          continue;
-        }
-        if (type.isTaxable) {
-          // taxAmount +=
-          //   Number.parseFloat(type.price) * Number.parseFloat(type.quantity);
-          if (type.source === "Labor" || type.source === "Lump Sum") {
-            taxAmount = taxAmount + Number.parseFloat(type.totalPrice);
-          } else {
-            // taxAmount =
-            //   taxAmount +
-            //   Number.parseFloat(type.price) * Number.parseFloat(type.quantity);
-            taxAmount = taxAmount + Number.parseFloat(type.totalPrice);
-          }
-        }
-        // console.log("Tax Amount index", taxAmount);
-      }
-    }
-    // console.log("Taxable Amount Before", taxAmount);
-    for (let labor of laborData) {
-      if (labor.isLaborTaxable) {
-        taxAmount += Number.parseFloat(labor.totalPrice);
-      }
-    }
-
-    // console.log("Taxable Amount", taxAmount);
-
     if (formData.customerType === "Normal") {
+      const taxAmount = (materialLaborData || []).reduce((acc, item) => {
+        if (!item) return acc;
+        if (item.dataType === "Material") {
+          if (!item.isTaxable) return acc;
+        } else if (!item.isLaborTaxable) {
+          return acc;
+        }
+        return acc + Number(item.totalPrice || 0);
+      }, 0);
       setTaxableAmount(Number.parseFloat(taxAmount));
     } else if (formData.customerType === "Commercial") {
       setTaxableAmount(materialsTotal + laborTotal);
     } else if (formData.customerType === "Exempt") {
       setTaxableAmount(0);
     }
-  }, [categorizedFieldCopies, formData]);
+  }, [
+    formData?.customerType,
+    laborTotal,
+    materialLaborData,
+    materialsTotal,
+  ]);
 
   // console.log("Labor Data", laborData)
 
@@ -247,6 +348,7 @@ Approved by: __________________  Date: ____________________`,
   useEffect(() => {
     getProjectById();
     getJobTypeById();
+    getJobTypesCatalog();
     getTaxPercentage();
     getCustomerFieldCopyData();
     getFGAddress();
@@ -392,8 +494,10 @@ Approved by: __________________  Date: ____________________`,
   console.log("Material Labor Data", laborData);
 
   function lineItemCostSum(item) {
+    const lineCost = getOfficeFieldCopyLineCost(item);
+    if (lineCost > 0) return lineCost;
     if (
-      item.totalCost != null &&
+      item?.totalCost != null &&
       item.totalCost !== "" &&
       !Number.isNaN(Number(item.totalCost))
     ) {
@@ -473,77 +577,314 @@ Approved by: __________________  Date: ____________________`,
     return Object.values(categorizedData);
   }
 
+  const formatQtyCell = (n) =>
+    Number.isInteger(n)
+      ? String(n)
+      : n.toLocaleString("en-US", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+
+  const crewRowExistsForJobType = (jobTypeLabel) => {
+    if (!jobTypeLabel) return false;
+    const key = normalizeJobTypeKey(jobTypeLabel);
+    return (fieldLaborData || []).some((labor) => {
+      if (!(Number(labor?.totalPrice) !== 0)) return false;
+      const jt = resolveFieldCopyDisplayJobType({
+        jobType: labor?.jobType,
+        formDataJobType: formData?.jobType,
+      });
+      return normalizeJobTypeKey(jt) === key;
+    });
+  };
+
   const getPdfItemDisplayFields = (item) => {
-    if (item?.source === "Labor") {
-      const row = finalizeLaborSummaryRow(item);
-      return {
-        qty: row.quantity,
-        unitCostVal: Number(row.cost) || 0,
-        displayPrice: Number(row.price) || 0,
-        markupVal: row.markup ?? row.markUp ?? null,
-        totalVal: Number(row.totalPrice) || 0,
-      };
-    }
-    const refUpper = String(item?.reference || "").toUpperCase();
-    const isLaborItem = refUpper.includes("LABOR");
-    const isContractorLabor =
-      isLaborItem &&
-      (refUpper.includes("(CONTRACTOR)") || refUpper.includes("CONTRACTOR"));
-    const qty = Number(item?.quantity || 0);
-    const unitCostVal =
-      item?.cost != null && item?.cost !== "" ? Number(item.cost) : 0;
-    const priceVal =
-      item?.price != null && item?.price !== "" ? Number(item.price) : null;
-    const totalVal =
-      item?.totalPrice != null && item?.totalPrice !== ""
-        ? Number(item.totalPrice)
-        : null;
-    const displayPrice = isContractorLabor
-      ? priceVal ?? (unitCostVal > 0 ? unitCostVal : null)
-      : priceVal ??
-        (qty > 0 && totalVal != null && totalVal > 0 ? totalVal / qty : null);
-    const markupVal = item?.markup ?? item?.markUp ?? null;
-    return {
-      qty,
-      unitCostVal,
+    const {
+      lineCost,
       displayPrice,
       markupVal,
-      totalVal: totalVal ?? 0,
+      displayTotal,
+      qtyText,
+    } = getOfficeFieldCopyRowCalculations(item);
+    const itemJt = resolveFieldCopyDisplayJobType({
+      jobType: item?.jobType || item?.type,
+      formDataJobType: formData?.jobType,
+    });
+    const crewHours = itemJt
+      ? lookupLaborMapValue(laborManHoursByJobType, itemJt)
+      : 0;
+
+    let qty = 0;
+    let qtyDisplay = "";
+    if (qtyText) {
+      qtyDisplay = qtyText;
+      qty = Number(qtyText) || 0;
+    } else if (
+      crewHours > 0 &&
+      item?.source !== "Labor" &&
+      !crewRowExistsForJobType(itemJt)
+    ) {
+      qty = crewHours;
+      qtyDisplay = formatQtyCell(crewHours);
+    } else {
+      const qtyFromItem = Number(item?.quantity);
+      if (Number.isFinite(qtyFromItem) && qtyFromItem > 0) {
+        qty = qtyFromItem;
+        qtyDisplay = formatQtyCell(qtyFromItem);
+      }
+    }
+    return {
+      qty,
+      qtyDisplay,
+      unitCostVal: lineCost,
+      displayPrice,
+      markupVal,
+      totalVal: displayTotal,
     };
   };
 
-  const getPdfAggregateLaborDisplayFields = (labor) => {
-    const jt = String(labor?.jobType || "").trim().toUpperCase();
-    const hourly = Number(laborHourlyRateByJobType?.[jt] || 0);
-    const manHours = Number(laborManHoursByJobType?.[jt] || 0);
-    const displayCost =
-      Number(labor?.totalCost || labor?.cost || 0) > 0
-        ? Number(labor?.totalCost || labor?.cost || 0)
-        : Number(labor?.totalPrice || 0);
-    const displayPrice =
-      labor?.price != null && labor?.price !== ""
-        ? Number(labor.price)
-        : hourly > 0
-          ? hourly
-          : 0;
-    const qty =
-      labor?.quantity > 0
-        ? Number(labor.quantity)
-        : manHours > 0
-          ? manHours
-          : displayPrice > 0 && Number(labor?.totalPrice || 0) > 0
-            ? Number(labor.totalPrice) / displayPrice
-            : hourly > 0 && displayCost > 0
-              ? displayCost / hourly
-              : 0;
-    return {
-      qty,
-      displayCost,
-      displayPrice,
-      markupVal: labor?.markup ?? labor?.markUp ?? null,
-      totalPrice: Number(labor?.totalPrice || 0),
-    };
+  const formatMoney = (n) =>
+    Number(n).toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+
+  /** Single source for on-screen table + PDF — keeps line items identical. */
+  const renderCustomerCopyTableBody = (variant = "view") => {
+    const isPdf = variant === "pdf";
+    const items = categorizedFieldCopies?.[0]?.items ?? [];
+
+    return (
+      <>
+        {items.map((item, idx) => {
+          const d = getPdfItemDisplayFields(item);
+          return (
+            <tr key={`${variant}-item-${idx}`}>
+              <td
+                className={isPdf ? "text-xs w-[400px] pr-2" : "w-[400px] pr-2"}
+                style={isPdf ? { textAlign: "left" } : undefined}
+              >
+                {isPdf ? (
+                  item?.reference?.toUpperCase()
+                ) : (
+                  item.reference?.toUpperCase()
+                )}
+              </td>
+              <td
+                className={isPdf ? "text-xs" : undefined}
+                style={isPdf ? { textAlign: "center" } : undefined}
+              >
+                {item?.size || ""}
+              </td>
+              <td
+                className={isPdf ? "text-xs" : undefined}
+                style={isPdf ? { textAlign: "center" } : undefined}
+              >
+                {d.qtyDisplay || (d.qty > 0 ? formatQtyCell(d.qty) : "")}
+              </td>
+              <td
+                className={isPdf ? "text-xs" : undefined}
+                style={isPdf ? { textAlign: "right" } : undefined}
+              >
+                {d.unitCostVal > 0 ? formatMoney(d.unitCostVal) : ""}
+              </td>
+              {!isPdf && (
+                <td>
+                  {d.markupVal !== null &&
+                  d.markupVal !== undefined &&
+                  d.markupVal !== ""
+                    ? Number(d.markupVal).toLocaleString("en-US", {
+                        minimumFractionDigits: 0,
+                        maximumFractionDigits: 2,
+                      }) + "%"
+                    : ""}
+                </td>
+              )}
+              <td
+                className={isPdf ? "text-xs" : undefined}
+                style={isPdf ? { textAlign: "right" } : undefined}
+              >
+                {d.displayPrice != null &&
+                !Number.isNaN(d.displayPrice) &&
+                d.displayPrice > 0
+                  ? formatMoney(d.displayPrice)
+                  : ""}
+              </td>
+              <td
+                className={isPdf ? "text-xs" : undefined}
+                style={isPdf ? { textAlign: "right" } : undefined}
+              >
+                {d.totalVal > 0 ? formatMoney(d.totalVal) : ""}
+              </td>
+            </tr>
+          );
+        })}
+        {fieldLaborData
+          .filter((labor) => labor.totalPrice !== 0)
+          .map((labor, idx) => {
+            const row = getOfficeFieldCopyCrewLaborRowFields(
+              labor,
+              laborManHoursByJobType,
+              laborHourlyRateByJobType,
+              formData?.jobType,
+              findLaborRateForJobType
+            );
+            if (!(row.displayTotal > 0) && !(row.lineCost > 0)) {
+              return null;
+            }
+            return (
+              <tr key={`${variant}-labor-${idx}`}>
+                <td
+                  className={isPdf ? "text-xs" : "w-[400px] pr-2"}
+                  style={isPdf ? { textAlign: "left" } : undefined}
+                >
+                  {isPdf ? row.description : <p className="m-0">{row.description}</p>}
+                </td>
+                <td
+                  className={isPdf ? "text-xs" : undefined}
+                  style={isPdf ? { textAlign: "center" } : undefined}
+                >
+                  {labor?.size || ""}
+                </td>
+                <td
+                  className={isPdf ? "text-xs" : undefined}
+                  style={isPdf ? { textAlign: "center" } : undefined}
+                >
+                  {row.qtyText}
+                </td>
+                <td
+                  className={isPdf ? "text-xs" : undefined}
+                  style={isPdf ? { textAlign: "right" } : undefined}
+                >
+                  {row.lineCost > 0 ? formatMoney(row.lineCost) : ""}
+                </td>
+                {!isPdf && (
+                  <td>
+                    {row.markupVal !== null &&
+                    row.markupVal !== undefined &&
+                    row.markupVal !== ""
+                      ? Number(row.markupVal).toLocaleString("en-US", {
+                          minimumFractionDigits: 0,
+                          maximumFractionDigits: 2,
+                        }) + "%"
+                      : ""}
+                  </td>
+                )}
+                <td
+                  className={isPdf ? "text-xs" : undefined}
+                  style={isPdf ? { textAlign: "right" } : undefined}
+                >
+                  {row.displayPrice != null && row.displayPrice > 0
+                    ? formatMoney(row.displayPrice)
+                    : ""}
+                </td>
+                <td
+                  className={isPdf ? "text-xs" : undefined}
+                  style={isPdf ? { textAlign: "right" } : undefined}
+                >
+                  {row.displayTotal > 0 ? formatMoney(row.displayTotal) : ""}
+                </td>
+              </tr>
+            );
+          })}
+      </>
+    );
   };
+
+  const renderCustomerCopyJobTypeSummary = (compact = false) =>
+    materialLaborData.map((item, idx) => {
+      if (item.dataType === "Material") {
+        const sourceLaborLabel =
+          item.source === "Labor" && item.reference
+            ? item.reference
+            : null;
+        return (
+          <div
+            key={`summary-mat-${idx}`}
+            className={compact ? "flex justify-between mt-1" : "flex justify-between mt-1 capitalize"}
+          >
+            <span>
+              <b
+                className={compact ? "w-[200px] inline-block" : undefined}
+                style={compact ? { whiteSpace: "pre" } : { whiteSpace: "pre" }}
+              >
+                {sourceLaborLabel ? (
+                  <>{sourceLaborLabel.toUpperCase()}</>
+                ) : item.source === "Labor" ? (
+                  <>{item.jobType?.toUpperCase()} LABOR</>
+                ) : item.jobType?.toLowerCase() === "equipment fees" ? (
+                  "EQUIPMENT LUMP SUM"
+                ) : (
+                  <>
+                    {item.jobType?.toUpperCase()}{" "}
+                    {handleInvoiceJobType(item.jobType)}
+                  </>
+                )}
+              </b>
+              {compact && (
+                <b>
+                  {formData?.customerType === "Normal"
+                    ? ["Labor", "Other"].includes(item.source)
+                      ? item.isTaxable
+                        ? "RT"
+                        : "RNT"
+                      : ["Lump Sum"].includes(item.source)
+                        ? `${item.isTaxable ? "RT" : "RNT"} (SALES TAX PAID ON MATERIAL)`
+                        : "RT"
+                    : formData.customerType === "Commercial"
+                      ? "CT"
+                      : formData?.customerType?.toUpperCase()}
+                </b>
+              )}
+            </span>
+            <span>
+              <b>$</b>{" "}
+              <span className={compact ? "inline-block w-[80px] text-end" : undefined}>
+                {item.totalPrice?.toLocaleString("en-US", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </span>
+            </span>
+          </div>
+        );
+      }
+      if (item.totalPrice > 0) {
+        return (
+          <div
+            key={`summary-lab-${idx}`}
+            className={compact ? "flex justify-between mt-1" : "flex justify-between mt-1 capitalize"}
+          >
+            <span>
+              <b className={compact ? "w-[200px] inline-block" : undefined}>
+                {item.jobType?.toUpperCase()} LABOR
+              </b>
+              {compact && (
+                <b>
+                  {formData?.customerType === "Normal"
+                    ? item.isLaborTaxable
+                      ? "RT"
+                      : "RNT"
+                    : formData.customerType === "Commercial"
+                      ? "CT"
+                      : formData?.customerType?.toUpperCase()}
+                </b>
+              )}
+            </span>
+            <span>
+              <b>$</b>{" "}
+              <span className={compact ? "inline-block w-[80px] text-end" : undefined}>
+                {item.totalPrice?.toLocaleString("en-US", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </span>
+            </span>
+          </div>
+        );
+      }
+      return null;
+    });
 
   // function categorizeMaterial(materialData) {
   //   const categorizedData = materialData.reduce((result, item) => {
@@ -569,12 +910,17 @@ Approved by: __________________  Date: ____________________`,
   function categorizeMaterial(materialData) {
     const categorizedData = materialData.reduce((result, item) => {
       const category = item.source === "Labor" ? "Labor" : "F&G/Other/LumpSum";
-      const key = `${category}_${item.jobType}_${item.isTaxable}`;
+      const reference = String(item?.reference || "").trim();
+      const key =
+        item.source === "Labor" && reference
+          ? `${category}_${reference}_${item.jobType}_${item.isTaxable}`
+          : `${category}_${item.jobType}_${item.isTaxable}`;
 
       if (!result[key]) {
         result[key] = {
           category,
           jobType: item.jobType,
+          reference,
           totalPrice: 0,
           isTaxable: item.isTaxable,
           source: item.source,
@@ -590,6 +936,9 @@ Approved by: __________________  Date: ____________________`,
 
       result[key].totalPrice += item.totalPrice || 0;
       result[key].quantity += qty;
+      if (!result[key].reference && reference) {
+        result[key].reference = reference;
+      }
 
       if (item.cost) {
         result[key].cost += Number(item.cost) * qty;
@@ -659,6 +1008,25 @@ Approved by: __________________  Date: ____________________`,
     } catch (error) {
       console.error(error);
       toast.error(error.response.message);
+    }
+  };
+
+  const getJobTypesCatalog = async () => {
+    try {
+      const token = localStorage.getItem("f&gstafftoken");
+      const headers = {
+        token: token,
+        "Content-Type": "application/json",
+      };
+      const response = await axios.get(
+        `${process.env.REACT_APP_API_BASE_URL}/admin/get-job-types-dpd`,
+        { headers }
+      );
+      if (response.data.statusCode === 200) {
+        setJobTypesCatalog(response.data.result || []);
+      }
+    } catch (error) {
+      console.error(error);
     }
   };
 
@@ -801,11 +1169,13 @@ Approved by: __________________  Date: ____________________`,
           cost: 0,
           markup: 0,
           markUp: 0,
+          totalPrice: 0,
         };
       }
 
       const row = summary[key];
       row.quantity += qty;
+      row.totalPrice += num(item.totalPrice);
 
       if (unitPrice > row.price) {
         row.price = unitPrice;
@@ -834,22 +1204,50 @@ Approved by: __________________  Date: ____________________`,
       }
     });
 
+    const finalizeMaterialSummaryRow = (row) => {
+      const markupPct = parseFloat(row.markup ?? row.markUp) || 0;
+      let qty = num(row.quantity);
+      const qtySafe = qty > 0 ? qty : 1;
+      const unitCost = num(row.cost);
+      let unitPrice = num(row.price);
+      let totalPrice = num(row.totalPrice);
+
+      if (!(unitPrice > 0) && unitCost > 0) {
+        if (markupPct > 0) {
+          unitPrice =
+            Math.round(unitCost * (1 + markupPct / 100) * 10000) / 10000;
+        } else if (row.source === "Other") {
+          unitPrice = Math.round(unitCost * 2 * 10000) / 10000;
+        }
+      }
+
+      if (!(totalPrice > 0)) {
+        if (unitPrice > 0) {
+          totalPrice = Math.round(unitPrice * qtySafe * 100) / 100;
+        } else if (unitCost > 0 && markupPct > 0) {
+          totalPrice =
+            Math.round(
+              (unitCost + (unitCost * markupPct) / 100) * qtySafe * 100
+            ) / 100;
+        }
+      }
+
+      return {
+        ...row,
+        quantity: qty > 0 ? qty : qtySafe,
+        cost: unitCost,
+        price: unitPrice,
+        totalPrice,
+        markup: markupPct,
+        markUp: markupPct,
+      };
+    };
+
     return Object.values(summary).map((row) => {
       if (row.source === "Labor") {
         return finalizeLaborSummaryRow(row);
       }
-      const qty = num(row.quantity);
-      const unitPrice = num(row.price);
-      const unitCost = num(row.cost);
-      const totalPrice =
-        qty > 0 && unitPrice > 0
-          ? Math.round(qty * unitPrice * 100) / 100
-          : 0;
-      return {
-        ...row,
-        cost: unitCost,
-        totalPrice,
-      };
+      return finalizeMaterialSummaryRow(row);
     });
   };
 
@@ -1227,13 +1625,12 @@ Approved by: __________________  Date: ____________________`,
                           style={{ tableLayout: "fixed", width: "100%" }}
                         >
                           <colgroup>
-                            <col style={{ width: "34%" }} />
+                            <col style={{ width: "36%" }} />
                             <col style={{ width: "9%" }} />
                             <col style={{ width: "9%" }} />
-                            <col style={{ width: "12%" }} />
-                            <col style={{ width: "10%" }} />
-                            <col style={{ width: "12%" }} />
-                            <col style={{ width: "14%" }} />
+                            <col style={{ width: "13%" }} />
+                            <col style={{ width: "13%" }} />
+                            <col style={{ width: "20%" }} />
                           </colgroup>
                           <thead>
                             <tr>
@@ -1250,9 +1647,6 @@ Approved by: __________________  Date: ____________________`,
                                 <span className="relative -top-1.5">COST</span>
                               </th>
                               <th className="text-xs" style={{ textAlign: "right" }}>
-                                <span className="relative -top-1.5">MARKUP</span>
-                              </th>
-                              <th className="text-xs" style={{ textAlign: "right" }}>
                                 <span className="relative -top-1.5">PRICE</span>
                               </th>
                               <th className="text-xs" style={{ textAlign: "right" }}>
@@ -1260,126 +1654,8 @@ Approved by: __________________  Date: ____________________`,
                               </th>
                             </tr>
                           </thead>
-                          <tbody>
-                            {group?.items?.map((item, idx) => {
-                              const d = getPdfItemDisplayFields(item);
-                              return (
-                                <tr key={`pdf-item-${idx}`}>
-                                  <td className="text-xs w-[400px] pr-2" style={{ textAlign: "left" }}>
-                                    {item?.reference?.toUpperCase()}
-                                  </td>
-                                  <td className="text-xs" style={{ textAlign: "center" }}>
-                                    {item?.size || ""}
-                                  </td>
-                                  <td className="text-xs" style={{ textAlign: "center" }}>
-                                    {d.qty > 0 ? d.qty : ""}
-                                  </td>
-                                  <td className="text-xs" style={{ textAlign: "right" }}>
-                                    {d.unitCostVal > 0
-                                      ? d.unitCostVal.toLocaleString("en-US", {
-                                          minimumFractionDigits: 2,
-                                          maximumFractionDigits: 2,
-                                        })
-                                      : ""}
-                                  </td>
-                                  <td className="text-xs" style={{ textAlign: "right" }}>
-                                    {d.markupVal !== null &&
-                                    d.markupVal !== undefined &&
-                                    d.markupVal !== ""
-                                      ? Number(d.markupVal).toLocaleString("en-US", {
-                                          minimumFractionDigits: 0,
-                                          maximumFractionDigits: 2,
-                                        }) + "%"
-                                      : ""}
-                                  </td>
-                                  <td className="text-xs" style={{ textAlign: "right" }}>
-                                    {d.displayPrice != null &&
-                                    !Number.isNaN(d.displayPrice) &&
-                                    d.displayPrice > 0
-                                      ? d.displayPrice.toLocaleString("en-US", {
-                                          minimumFractionDigits: 2,
-                                          maximumFractionDigits: 2,
-                                        })
-                                      : ""}
-                                  </td>
-                                  <td className="text-xs" style={{ textAlign: "right" }}>
-                                    {d.totalVal > 0
-                                      ? d.totalVal.toLocaleString("en-US", {
-                                          minimumFractionDigits: 2,
-                                          maximumFractionDigits: 2,
-                                        })
-                                      : ""}
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                            {fieldLaborData
-                              .filter((labor) => labor.totalPrice !== 0)
-                              .filter((labor) => {
-                                const existsInGroupItems = group?.items?.some(
-                                  (item) =>
-                                    item?.reference?.toUpperCase() ===
-                                    `${labor.jobType} LABOR`.toUpperCase()
-                                );
-                                return !existsInGroupItems;
-                              })
-                              .map((labor, idx) => {
-                                const d = getPdfAggregateLaborDisplayFields(labor);
-                                return (
-                                  <tr key={`pdf-labor-${idx}`}>
-                                    <td className="text-xs" style={{ textAlign: "left" }}>
-                                      {labor.jobType?.toUpperCase()} LABOR
-                                    </td>
-                                    <td className="text-xs" style={{ textAlign: "center" }}>
-                                      {labor?.size || ""}
-                                    </td>
-                                    <td className="text-xs" style={{ textAlign: "center" }}>
-                                      {d.qty > 0
-                                        ? Number.isInteger(d.qty)
-                                          ? String(d.qty)
-                                          : d.qty.toLocaleString("en-US", {
-                                              minimumFractionDigits: 2,
-                                              maximumFractionDigits: 2,
-                                            })
-                                        : ""}
-                                    </td>
-                                    <td className="text-xs" style={{ textAlign: "right" }}>
-                                      {d.displayCost > 0
-                                        ? d.displayCost.toLocaleString("en-US", {
-                                            minimumFractionDigits: 2,
-                                            maximumFractionDigits: 2,
-                                          })
-                                        : ""}
-                                    </td>
-                                    <td className="text-xs" style={{ textAlign: "right" }}>
-                                      {d.markupVal !== null &&
-                                      d.markupVal !== undefined &&
-                                      d.markupVal !== ""
-                                        ? Number(d.markupVal).toLocaleString("en-US", {
-                                            minimumFractionDigits: 0,
-                                            maximumFractionDigits: 2,
-                                          }) + "%"
-                                        : ""}
-                                    </td>
-                                    <td className="text-xs" style={{ textAlign: "right" }}>
-                                      {d.displayPrice > 0
-                                        ? d.displayPrice.toLocaleString("en-US", {
-                                            minimumFractionDigits: 2,
-                                            maximumFractionDigits: 2,
-                                          })
-                                        : ""}
-                                    </td>
-                                    <td className="text-xs" style={{ textAlign: "right" }}>
-                                      {d.totalPrice > 0
-                                        ? d.totalPrice.toLocaleString("en-US", {
-                                            minimumFractionDigits: 2,
-                                            maximumFractionDigits: 2,
-                                          })
-                                        : ""}
-                                    </td>
-                                  </tr>
-                                );
-                              })}
+                          <tbody id="customer-copy-pdf-tbody">
+                            {index === 0 ? renderCustomerCopyTableBody("pdf") : null}
                           </tbody>
                         </table>
                       </div>
@@ -1468,99 +1744,8 @@ Approved by: __________________  Date: ____________________`,
                     })}
                 </div> */}
 
-                <div className="mt-1 text-xs">
-                  {materialLaborData.map((item) => {
-                    if (item.dataType === "Material") {
-                      return (
-                        <div className="flex justify-between mt-1">
-                          <span>
-                            {/* <b className="w-[200px] inline-block">
-                              {item.jobType?.toUpperCase()}{" "}
-                              {item.source === "Labor"
-                                ? "LABOR"
-                                : handleInvoiceJobType(item.jobType)}
-                            </b> */}
-
-                            <b className="w-[200px] inline-block" style={{ whiteSpace: "pre" }}>
-                              {item.source === "Labor" ? (
-                                <>
-                                  {item.jobType?.toUpperCase()}{" "}LABOR
-                                </>
-                              ) : item.jobType?.toLowerCase() === "equipment fees" ? (
-                                "EQUIPMENT LUMP SUM"
-                              ) : (
-                                <>
-                                  {item.jobType?.toUpperCase()}{" "}{handleInvoiceJobType(item.jobType)}
-                                </>
-                              )}
-                            </b>
-                            {/* <b classNamee="w-[200px] inline-block">
-                              
-                              {item.source === "Labor"
-                                ? `${item.jobType?.toUpperCase()} LABOR`
-                                : item.jobType?.toLowerCase() === "equipment fees"
-                                  ? "EQUIPMENT LUMP SUM"
-                                  : `${item.jobType?.toUpperCase()} ${handleInvoiceJobType(item.jobType)}`
-                              }
-                            </b> */}
-                            <b>
-                              {formData?.customerType === "Normal"
-                                ? ["Labor", "Other"].includes(item.source)
-                                  ? item.isTaxable
-                                    ? "RT"
-                                    : "RNT"
-                                  : ["Lump Sum"].includes(item.source)
-                                    ? `${item.isTaxable ? "RT" : "RNT"
-                                    } (SALES TAX PAID ON MATERIAL)`
-                                    : "RT"
-                                : formData.customerType === "Commercial"
-                                  ? "CT"
-                                  : formData?.customerType?.toUpperCase()}
-                            </b>
-                          </span>
-                          <span>
-                            <b>$</b>{" "}
-                            <span className="inline-block w-[80px] text-end">
-                              {item.totalPrice?.toLocaleString("en-US", {
-                                minimumFractionDigits: 2,
-                                maximumFractionDigits: 2,
-                              })}
-                            </span>
-                          </span>
-                        </div>
-                      );
-                    } else {
-                      if (item.totalPrice > 0) {
-                        return (
-                          <div className="flex justify-between mt-1">
-                            <span>
-                              <b className="w-[200px] inline-block">
-                                {item.jobType?.toUpperCase()} LABOR
-                              </b>
-                              <b>
-                                {formData?.customerType === "Normal"
-                                  ? item.isLaborTaxable
-                                    ? "RT"
-                                    : "RNT"
-                                  : formData.customerType === "Commercial"
-                                    ? "CT"
-                                    : formData?.customerType?.toUpperCase()}
-                              </b>
-                            </span>
-                            <span>
-                              <b>$</b>{" "}
-                              <span className="inline-block w-[80px] text-end">
-                                {item.totalPrice?.toLocaleString("en-US", {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                })}
-                              </span>
-                            </span>
-                          </div>
-                        );
-                      }
-                    }
-                  })}
+                <div className="mt-1 text-xs" id="customer-copy-pdf-summary">
+                  {renderCustomerCopyJobTypeSummary(true)}
                 </div>
 
                 {/* Invoice Summary */}
@@ -1834,165 +2019,8 @@ Approved by: __________________  Date: ____________________`,
                               <th>Total</th>
                             </tr>
                           </thead>
-                          <tbody>
-                            {group.items.map((item, idx) => (
-                              <tr key={idx}>
-                                {/* <td>{item.source}</td> */}
-                                <td className="w-[400px] pr-2">
-                                  {item.reference?.toUpperCase()}
-                                </td>
-                                <td>{item.size}</td>
-                                <td>{item.quantity ? item.quantity : ""}</td>
-                                <td>
-                                  {item.cost != null && item.cost !== ""
-                                    ? Number(item.cost).toLocaleString("en-US", {
-                                        minimumFractionDigits: 2,
-                                        maximumFractionDigits: 2,
-                                      })
-                                    : ""}
-                                </td>
-                                <td>
-                                  {(() => {
-                                    const markupVal = item?.markup ?? item?.markUp ?? null;
-                                    if (markupVal === null || markupVal === undefined || markupVal === "") return "";
-                                    return Number(markupVal).toLocaleString("en-US", {
-                                      minimumFractionDigits: 0,
-                                      maximumFractionDigits: 2,
-                                    }) + "%";
-                                  })()}
-                                </td>
-                                <td>
-                                  {(() => {
-                                    const d = getPdfItemDisplayFields(item);
-                                    return d.displayPrice != null &&
-                                      !Number.isNaN(d.displayPrice) &&
-                                      d.displayPrice > 0
-                                      ? d.displayPrice.toLocaleString("en-US", {
-                                          minimumFractionDigits: 2,
-                                          maximumFractionDigits: 2,
-                                        })
-                                      : "";
-                                  })()}
-                                </td>
-                                <td>
-                                  {item.totalPrice?.toLocaleString("en-US", {
-                                    minimumFractionDigits: 2,
-                                    maximumFractionDigits: 2,
-                                  })}
-                                </td>
-                              </tr>
-                            ))}
-                            {fieldLaborData
-                              .filter((labor) => labor.totalPrice !== 0)
-                              .filter((labor) => {
-                                const existsInGroupItems = group?.items?.some(
-                                  (item) =>
-                                    item?.reference?.toUpperCase() ===
-                                    `${labor.jobType} LABOR`.toUpperCase()
-                                );
-                                return !existsInGroupItems;
-                              })
-                              .map((labor, idx) => {
-                                const jt = String(labor?.jobType || "")
-                                  .trim()
-                                  .toUpperCase();
-                                const hourly = Number(
-                                  laborHourlyRateByJobType?.[jt] || 0
-                                );
-                                const manHours = Number(
-                                  laborManHoursByJobType?.[jt] || 0
-                                );
-                                const displayCost =
-                                  Number(labor?.totalCost || labor?.cost || 0) >
-                                  0
-                                    ? Number(
-                                        labor?.totalCost || labor?.cost || 0
-                                      )
-                                    : Number(labor?.totalPrice || 0);
-                                const displayPrice =
-                                  labor?.price != null && labor?.price !== ""
-                                    ? Number(labor.price)
-                                    : hourly > 0
-                                      ? hourly
-                                      : 0;
-                                const qty =
-                                  labor?.quantity > 0
-                                    ? Number(labor.quantity)
-                                    : manHours > 0
-                                      ? manHours
-                                      : displayPrice > 0 &&
-                                          Number(labor?.totalPrice || 0) > 0
-                                        ? Number(labor.totalPrice) / displayPrice
-                                        : hourly > 0 && displayCost > 0
-                                          ? displayCost / hourly
-                                          : 0;
-                                return (
-                                  <tr key={`field-labor-${idx}`}>
-                                    <td className="w-[400px] pr-2">
-                                      <p className="m-0">
-                                        {labor.jobType} LABOR
-                                      </p>
-                                    </td>
-                                    <td>{labor?.size || ""}</td>
-                                    <td>
-                                      {qty > 0
-                                        ? Number.isInteger(qty)
-                                          ? String(qty)
-                                          : qty.toLocaleString("en-US", {
-                                              minimumFractionDigits: 2,
-                                              maximumFractionDigits: 2,
-                                            })
-                                        : ""}
-                                    </td>
-                                    <td>
-                                      {displayCost > 0
-                                        ? displayCost.toLocaleString("en-US", {
-                                            minimumFractionDigits: 2,
-                                            maximumFractionDigits: 2,
-                                          })
-                                        : ""}
-                                    </td>
-                                    <td>
-                                      {labor?.markup != null &&
-                                      labor?.markup !== ""
-                                        ? Number(labor.markup).toLocaleString(
-                                            "en-US",
-                                            {
-                                              minimumFractionDigits: 0,
-                                              maximumFractionDigits: 2,
-                                            }
-                                          ) + "%"
-                                        : labor?.markUp != null &&
-                                            labor?.markUp !== ""
-                                          ? Number(labor.markUp).toLocaleString(
-                                              "en-US",
-                                              {
-                                                minimumFractionDigits: 0,
-                                                maximumFractionDigits: 2,
-                                              }
-                                            ) + "%"
-                                          : ""}
-                                    </td>
-                                    <td>
-                                      {displayPrice > 0
-                                        ? displayPrice.toLocaleString("en-US", {
-                                            minimumFractionDigits: 2,
-                                            maximumFractionDigits: 2,
-                                          })
-                                        : ""}
-                                    </td>
-                                    <td>
-                                      {labor.totalPrice?.toLocaleString(
-                                        "en-US",
-                                        {
-                                          minimumFractionDigits: 2,
-                                          maximumFractionDigits: 2,
-                                        }
-                                      )}
-                                    </td>
-                                  </tr>
-                                );
-                              })}
+                          <tbody id="customer-copy-view-tbody">
+                            {index === 0 ? renderCustomerCopyTableBody("view") : null}
                           </tbody>
                         </table>
                       </div>
@@ -2012,49 +2040,8 @@ Approved by: __________________  Date: ____________________`,
               </div>
 
               {/* Compiled data by Job Type */}
-              <div className="mt-6 mb-4">
-                {materialData.map((material) => {
-                  return (
-                    <div className="flex justify-between mt-1 capitalize">
-                      <span>
-                        {/* <b>
-                          {material.jobType?.toUpperCase()}{" "}
-                          {material.source === "Labor"
-                            ? "LABOR"
-                            : handleInvoiceJobType(material.jobType)}
-                        </b> */}
-                        <b style={{ whiteSpace: "pre" }}>
-                          {material.source === "Labor" ? (
-                            <>
-                              {material.jobType?.toUpperCase()}{" "}LABOR
-                            </>
-                          ) : material.jobType?.toLowerCase() === "equipment fees" ? (
-                            "EQUIPMENT LUMP SUM"
-                          ) : (
-                            <>
-                              {material.jobType?.toUpperCase()}{" "}{handleInvoiceJobType(material.jobType)}
-                            </>
-                          )}
-                        </b>
-                        {/* <b>
-                          {material.source === "Labor"
-                            ? `${material.jobType?.toUpperCase()} LABOR`
-                            : material.jobType?.toLowerCase() === "equipment fees"
-                              ? "EQUIPMENT LUMP SUM"
-                              : `${material.jobType?.toUpperCase()} ${handleInvoiceJobType(material.jobType)}`
-                          }
-                        </b> */}
-                      </span>
-                      <span>
-                        <b>$</b>{" "}
-                        {material.totalPrice?.toLocaleString("en-US", {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}
-                      </span>
-                    </div>
-                  );
-                })}
+              <div className="mt-6 mb-4" id="customer-copy-view-summary">
+                {renderCustomerCopyJobTypeSummary(false)}
                 {/* {laborData
                   .filter((labor) => labor.totalPrice !== 0)
                   .map((labor) => {
@@ -2184,54 +2171,6 @@ Approved by: __________________  Date: ____________________`,
                       </div>
                     </>
                   )}
-                  {(() => {
-                    const items = categorizedFieldCopies?.[0]?.items ?? [];
-                    const totalCost = items.reduce((s, i) => {
-                      if (i.source === "Labor") {
-                        return s + (Number(i.cost) || 0);
-                      }
-                      return (
-                        s + (Number(i.quantity) || 0) * (Number(i.cost) || 0)
-                      );
-                    }, 0);
-                    const subtotalVal =
-                      (materialsTotal || 0) +
-                      (laborTotal || 0) -
-                      (Number(formData?.taxCredits) || 0) -
-                      (Number(formData?.nonTaxCredits) || 0);
-                    const totalMarkupDollars = totalCost > 0 ? subtotalVal - totalCost : 0;
-                    const markupPercent = totalCost > 0 && totalMarkupDollars >= 0 ? (totalMarkupDollars / totalCost) * 100 : null;
-                    return (
-                      <>
-                        <div className="flex justify-between my-2">
-                          <span>Cost</span>
-                          <span>
-                            <b>$</b>{" "}
-                            {totalCost.toLocaleString("en-US", {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })}
-                          </span>
-                        </div>
-                        <div className="flex justify-between my-2">
-                          <span>Markup</span>
-                          <span>
-                            {markupPercent != null ? (
-                              <>
-                                {markupPercent.toLocaleString("en-US", {
-                                  minimumFractionDigits: 0,
-                                  maximumFractionDigits: 2,
-                                })}
-                                %
-                              </>
-                            ) : (
-                              ""
-                            )}
-                          </span>
-                        </div>
-                      </>
-                    );
-                  })()}
                   <hr />
 
                   <div className="flex justify-between my-2">

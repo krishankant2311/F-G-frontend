@@ -858,23 +858,32 @@ export default function ViewStaffProject() {
           )?.replace(",", "");
         }
         setDocumentName(doc_name);
-        const fieldCopies = response.data.result.officeFieldCopy;
+        const officeFieldCopyList = Array.isArray(
+          response.data.result.officeFieldCopy
+        )
+          ? response.data.result.officeFieldCopy
+          : [];
         let filteredFieldCopies = [];
-        for (const copy of fieldCopies) {
-          filteredFieldCopies = [...filteredFieldCopies, ...copy.fieldCopies];
+        for (const copy of officeFieldCopyList) {
+          if (Array.isArray(copy?.fieldCopies)) {
+            filteredFieldCopies = [
+              ...filteredFieldCopies,
+              ...copy.fieldCopies,
+            ];
+          }
         }
 
         // setFieldCopiesArray(filteredFieldCopies);
-        setDraftCopies(response.data.result.draftCopy);
+        setDraftCopies(response.data.result.draftCopy || []);
         // Sort the data
-        const sortedData = response?.data?.result?.officeFieldCopy?.sort(
+        const sortedData = [...officeFieldCopyList].sort(
           (a, b) => {
             const dateA = new Date(a.entryDate.split("-").reverse().join("-")); // Convert "3-12-2024" to "2024-12-03"
             const dateB = new Date(b.entryDate.split("-").reverse().join("-"));
             return dateA - dateB; // Sort in ascending order
           }
         );
-        setFieldCopies(sortedData);
+        setFieldCopies(sortedData || []);
         setBidedCopy(response?.data?.result?.bidedCopy || []);
       } else {
         toast.error(response.data.message);
@@ -1334,10 +1343,8 @@ export default function ViewStaffProject() {
       toast.error("PDF content not ready yet.");
       return;
     }
-    if (!Array.isArray(fieldCopies) || fieldCopies.length === 0) {
-      toast.error("No office field copy data found for this project.");
-      return;
-    }
+
+    // Blank field copy PDF uses project header + empty rows; office field copies are not required.
 
     // Create a temporary div with the hidden content
     const tempDiv = document.createElement("div");

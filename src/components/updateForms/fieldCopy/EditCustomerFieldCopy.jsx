@@ -12,6 +12,7 @@ import {
   getMaterialNameInputValue,
   hydrateOtherFieldCopyFromApi,
   materialNameBaseForEdit,
+  otherFieldCopyCostDisplayValue,
   recalcLaborGenerateCustomerLine,
   recalcOtherFieldCopyLine,
   toPersistedCopy,
@@ -646,6 +647,13 @@ export default function EditCustomerFieldCopy() {
       );
     }
 
+    if (name === "cost" && updatedForm.source === "Other") {
+      Object.assign(
+        updatedForm,
+        recalcOtherFieldCopyLine(updatedForm, "cost")
+      );
+    }
+
     // Calculate total price if both price and quantity are filled
     if (name === "price" || name === "quantity") {
       const price = parseFloat(updatedForm.price) || 0;
@@ -654,7 +662,10 @@ export default function EditCustomerFieldCopy() {
       if (updatedForm.source === "Other") {
         Object.assign(
           updatedForm,
-          recalcOtherFieldCopyLine(updatedForm)
+          recalcOtherFieldCopyLine(
+            updatedForm,
+            name === "quantity" ? "preserve" : "price"
+          )
         );
       } else if (updatedForm.source === "F&G") {
         Object.assign(updatedForm, ensureFgCostFromPrice(updatedForm));
@@ -697,7 +708,7 @@ export default function EditCustomerFieldCopy() {
       if (updatedForm.source === "Other") {
         Object.assign(
           updatedForm,
-          recalcOtherFieldCopyLine(updatedForm)
+          recalcOtherFieldCopyLine(updatedForm, "preserve")
         );
       } else if (updatedForm.source === "Labor") {
         Object.assign(
@@ -720,7 +731,7 @@ export default function EditCustomerFieldCopy() {
       if (updatedForm.source === "Other") {
         Object.assign(
           updatedForm,
-          recalcOtherFieldCopyLine(updatedForm)
+          recalcOtherFieldCopyLine(updatedForm, "preserve")
         );
       } else if (updatedForm.source === "Labor") {
         Object.assign(
@@ -1795,15 +1806,16 @@ export default function EditCustomerFieldCopy() {
                             </label>
                             <input
                               type="number"
-                              className="border-b border-[grey] outline-none"
-                              id={`totalCost-${index}`}
-                              name="totalCost"
+                              className="border-b border-[grey] outline-none w-[180px]"
+                              id={`cost-other-${index}`}
+                              name="cost"
                               placeholder="Enter Cost"
                               onChange={(e) => handleInputChange(e, index)}
-                              value={formData.cost}
+                              value={otherFieldCopyCostDisplayValue(formData.cost)}
                               min={0}
+                              max={10000000}
+                              step="any"
                               required
-                              readOnly
                             />
                           </div>
                           <div className="form-group flex flex-col">

@@ -9,8 +9,10 @@ import html2pdf from "html2pdf.js";
 import fng_logo from "../../assets/images/fng_logo_black.png";
 import parse from "html-react-parser";
 import {
-  getFieldCopyLineDisplayPrice,
+  getOfficeFieldCopyLineCost,
+  getOfficeFieldCopyRowCalculations,
   getLaborPdfDescription,
+  isFieldCopyLaborContext,
   shouldSkipAggregatedLaborPdfRow,
 } from "../../utils/fieldCopyLaborDisplay";
 import { finalizeLaborSummaryRow } from "../../utils/materialReference";
@@ -74,6 +76,21 @@ export default function OfficeFieldCopyBidView() {
   const navigate = useNavigate();
 
   const { tableSize } = useTableContext();
+
+  const invoiceSalesTax = useMemo(() => {
+    const tc = Number(formData.taxCredits) || 0;
+    const taxableBase = formData.isProjectTaxable
+      ? Math.max(0, Number(taxableAmount) - tc)
+      : tc > Number(taxableAmount)
+        ? 0
+        : Number(taxableAmount);
+    return (taxPercent * taxableBase) / 100;
+  }, [
+    formData.isProjectTaxable,
+    formData.taxCredits,
+    taxPercent,
+    taxableAmount,
+  ]);
 
   /** Bid proposal grand total (matches hidden “Proposal Summary” totals). */
   const bidProposalGrandTotal = useMemo(() => {
@@ -237,7 +254,8 @@ export default function OfficeFieldCopyBidView() {
       categorizedFieldCopies[0]?.items?.length > 0
     ) {
       for (let type of categorizedFieldCopies[0].items) {
-        if (type.source === "Labor") {
+        // Labor-like lines are represented in laborData as well; skip to avoid double tax.
+        if (type.source === "Labor" || isFieldCopyLaborContext(type)) {
           continue;
         }
         if (type.isTaxable) {
@@ -288,7 +306,15 @@ export default function OfficeFieldCopyBidView() {
     } else if (formData.customerType === "Exempt") {
       setTaxableAmount(0);
     }
-  }, [categorizedFieldCopies, formData]);
+  }, [
+    categorizedFieldCopies,
+    laborData,
+    fieldCopies,
+    formData?.customerType,
+    formData?.projectCode,
+    materialsTotal,
+    laborTotal,
+  ]);
 
   // useEffect(() => {
   //   let taxAmount = 0;
@@ -327,6 +353,9 @@ export default function OfficeFieldCopyBidView() {
       categorizedBidCopies[0]?.items?.length > 0
     ) {
       for (let type of categorizedBidCopies[0].items) {
+        if (type.source === "Labor" || isFieldCopyLaborContext(type)) {
+          continue;
+        }
         if (type.isTaxable) {
           taxAmount = taxAmount + Number.parseFloat(type.totalPrice);
         }
@@ -338,7 +367,7 @@ export default function OfficeFieldCopyBidView() {
       }
     }
     setTaxableBidAmount(taxAmount);
-  }, [categorizedBidCopies]);
+  }, [categorizedBidCopies, laborData]);
 
   useEffect(() => {
     getProjectById();
@@ -1063,8 +1092,10 @@ export default function OfficeFieldCopyBidView() {
   };
 
   function lineItemCostSum(item) {
+    const lineCost = getOfficeFieldCopyLineCost(item);
+    if (lineCost > 0) return lineCost;
     if (
-      item.totalCost != null &&
+      item?.totalCost != null &&
       item.totalCost !== "" &&
       !Number.isNaN(Number(item.totalCost))
     ) {
@@ -1075,38 +1106,6 @@ export default function OfficeFieldCopyBidView() {
       item.quantity != null && item.quantity !== "" ? Number(item.quantity) : 1;
     if (c != null && c !== "" && Number(c) > 0) {
       return Number(c) * q;
-    }
-    // Fallback: derive base cost from markup% + sell total when cost fields missing
-    const markupValRaw = item.markup ?? item.markUp ?? null;
-    const markupPct =
-      markupValRaw !== null &&
-      markupValRaw !== undefined &&
-      markupValRaw !== "" &&
-      !Number.isNaN(Number(markupValRaw))
-        ? Number(markupValRaw)
-        : null;
-    const sellTotal =
-      item.totalPrice != null &&
-      item.totalPrice !== "" &&
-      !Number.isNaN(Number(item.totalPrice))
-        ? Number(item.totalPrice)
-        : 0;
-    if (
-      markupPct != null &&
-      Number.isFinite(markupPct) &&
-      markupPct >= 0 &&
-      Number.isFinite(sellTotal) &&
-      sellTotal > 0
-    ) {
-      return sellTotal / (1 + markupPct / 100);
-    }
-    // Final fallback for labor: if we only have sell total, treat it as cost
-    // (some labor rows don't carry cost/totalCost fields in the payload).
-    const isLabor =
-      String(item?.source || "").toLowerCase() === "labor" ||
-      item?.isLaborTaxable !== undefined;
-    if (isLabor && Number.isFinite(sellTotal) && sellTotal > 0) {
-      return sellTotal;
     }
     return 0;
   }
@@ -1451,29 +1450,13 @@ export default function OfficeFieldCopyBidView() {
                                 group.items &&
                                 group.items.length > 0 &&
                                 group.items.map((item, idx) => {
-                                  const qty = Number(item?.quantity || 1);
-                                  const markupVal = item?.markup ?? item?.markUp ?? null;
-                                  const priceVal =
-                                    item?.price != null && item?.price !== ""
-                                      ? Number(item.price)
-                                      : null;
-                                  const totalVal =
-                                    item?.totalPrice != null && item?.totalPrice !== ""
-                                      ? Number(item.totalPrice)
-                                      : null;
-                                  const displayPrice =
-                                    getFieldCopyLineDisplayPrice(item);
-
-                                  const lineCost =
-                                    item?.totalCost != null &&
-                                    item?.totalCost !== "" &&
-                                    Number(item.totalCost) > 0
-                                      ? Number(item.totalCost)
-                                      : item?.cost != null &&
-                                          item?.cost !== "" &&
-                                          Number(item.cost) > 0
-                                        ? Number(item.cost) * qty
-                                        : 0;
+                                  const {
+                                    lineCost,
+                                    displayPrice,
+                                    markupVal,
+                                    displayTotal,
+                                    qtyText,
+                                  } = getOfficeFieldCopyRowCalculations(item);
 
                                   return (
                                     <tr key={idx}>
@@ -1482,7 +1465,7 @@ export default function OfficeFieldCopyBidView() {
                                       </td>
                                       <td style={{ textAlign: "center" }}>{item?.size}</td>
                                       <td style={{ textAlign: "center" }}>
-                                        {item?.quantity ? item.quantity : ""}
+                                        {qtyText || (item?.quantity ? item.quantity : "")}
                                       </td>
                                       <td style={{ textAlign: "right" }}>
                                         {lineCost > 0
@@ -1511,10 +1494,12 @@ export default function OfficeFieldCopyBidView() {
                                           : ""}
                                       </td>
                                       <td style={{ textAlign: "right" }}>
-                                        {item?.totalPrice?.toLocaleString("en-US", {
-                                          minimumFractionDigits: 2,
-                                          maximumFractionDigits: 2,
-                                        })}
+                                        {displayTotal > 0
+                                          ? displayTotal.toLocaleString("en-US", {
+                                              minimumFractionDigits: 2,
+                                              maximumFractionDigits: 2,
+                                            })
+                                          : ""}
                                       </td>
                                     </tr>
                                   );
@@ -1990,34 +1975,40 @@ export default function OfficeFieldCopyBidView() {
                         </span>
                       </div>
                       <hr />
+                      <div
+                        className={`${workSummaryGridClassPdf} my-2 items-baseline uppercase`}
+                      >
+                        <span className="col-span-3 min-w-0">
+                          SALES TAX
+                          {taxPercent > 0 ? ` (${taxPercent}%)` : ""}
+                        </span>
+                        <span className="min-w-0" aria-hidden />
+                        <span className="min-w-0" aria-hidden />
+                        <span className="min-w-0" aria-hidden />
+                        <span className="text-end tabular-nums whitespace-nowrap">
+                          <b>$</b>{" "}
+                          {invoiceSalesTax.toLocaleString("en-US", {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
+                        </span>
+                      </div>
+                      <hr />
                       <div className="flex justify-between items-baseline gap-3 my-2">
                         <span>GRAND TOTAL</span>
                         <span className="shrink-0 whitespace-nowrap tabular-nums text-end">
                           <b>$</b>{" "}
                           <span className="border-b border-black pb-[7px] inline">
-                            {formData.isProjectTaxable
-                              ? (
-                                  (taxPercent *
-                                    (taxableAmount - formData.taxCredits)) /
-                                    100 +
-                                  (materialsTotal +
-                                    laborTotal -
-                                    (formData.taxCredits +
-                                      formData.nonTaxCredits))
-                                )?.toLocaleString("en-US", {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                })
-                              : (
-                                  (taxPercent * taxableAmount) / 100 +
-                                  (materialsTotal +
-                                    laborTotal -
-                                    (formData.taxCredits +
-                                      formData.nonTaxCredits))
-                                )?.toLocaleString("en-US", {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                })}
+                            {(
+                              invoiceSalesTax +
+                              (materialsTotal +
+                                laborTotal -
+                                (Number(formData.taxCredits) || 0) -
+                                (Number(formData.nonTaxCredits) || 0))
+                            ).toLocaleString("en-US", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}
                           </span>
                         </span>
                       </div>
@@ -2198,33 +2189,13 @@ export default function OfficeFieldCopyBidView() {
                               group.items &&
                               group.items.length > 0 &&
                               group.items.map((item, idx) => {
-                                const qty = Number(item?.quantity || 1);
-                                const markupVal = item?.markup ?? item?.markUp ?? null;
-                                const totalCostVal =
-                                  item?.totalCost != null && item?.totalCost !== ""
-                                    ? Number(item.totalCost)
-                                    : 0;
-                                const unitCostVal =
-                                  item?.cost != null && item?.cost !== ""
-                                    ? Number(item.cost)
-                                    : 0;
-                                const lineCost =
-                                  totalCostVal > 0
-                                    ? totalCostVal
-                                    : unitCostVal > 0
-                                      ? unitCostVal * qty
-                                      : 0;
-
-                                const priceVal =
-                                  item?.price != null && item?.price !== ""
-                                    ? Number(item.price)
-                                    : null;
-                                const totalVal =
-                                  item?.totalPrice != null && item?.totalPrice !== ""
-                                    ? Number(item.totalPrice)
-                                    : null;
-                                const displayPrice =
-                                  getFieldCopyLineDisplayPrice(item);
+                                const {
+                                  lineCost,
+                                  displayPrice,
+                                  markupVal,
+                                  displayTotal,
+                                  qtyText,
+                                } = getOfficeFieldCopyRowCalculations(item);
 
                                 return (
                                   <tr key={idx}>
@@ -2234,7 +2205,8 @@ export default function OfficeFieldCopyBidView() {
                                   </td>
                                   <td>{item?.size}</td>
                                   <td>
-                                    {item?.quantity === 0 ? "" : item.quantity}
+                                    {qtyText ||
+                                      (item?.quantity === 0 ? "" : item.quantity)}
                                   </td>
                                   <td>
                                     {lineCost > 0
@@ -2263,10 +2235,12 @@ export default function OfficeFieldCopyBidView() {
                                       : ""}
                                   </td>
                                   <td>
-                                    {item?.totalPrice?.toLocaleString("en-US", {
-                                      minimumFractionDigits: 2,
-                                      maximumFractionDigits: 2,
-                                    })}
+                                    {displayTotal > 0
+                                      ? displayTotal.toLocaleString("en-US", {
+                                          minimumFractionDigits: 2,
+                                          maximumFractionDigits: 2,
+                                        })
+                                      : ""}
                                   </td>
                                 </tr>
                                 );
@@ -2486,32 +2460,13 @@ export default function OfficeFieldCopyBidView() {
                                 group.items &&
                                 group.items.length > 0 &&
                                 group.items.map((item, idx) => {
-                                  const qty = Number(item?.quantity || 1);
-                                  const totalCostVal =
-                                    item?.totalCost != null && item?.totalCost !== ""
-                                      ? Number(item.totalCost)
-                                      : 0;
-                                  const unitCostVal =
-                                    item?.cost != null && item?.cost !== ""
-                                      ? Number(item.cost)
-                                      : 0;
-                                  const lineCost =
-                                    totalCostVal > 0
-                                      ? totalCostVal
-                                      : unitCostVal > 0
-                                        ? unitCostVal * qty
-                                        : 0;
-                                  const markupVal = item?.markup ?? item?.markUp ?? null;
-                                  const priceVal =
-                                    item?.price != null && item?.price !== ""
-                                      ? Number(item.price)
-                                      : null;
-                                  const totalVal =
-                                    item?.totalPrice != null && item?.totalPrice !== ""
-                                      ? Number(item.totalPrice)
-                                      : null;
-                                  const displayPrice =
-                                    getFieldCopyLineDisplayPrice(item);
+                                  const {
+                                    lineCost,
+                                    displayPrice,
+                                    markupVal,
+                                    displayTotal,
+                                    qtyText,
+                                  } = getOfficeFieldCopyRowCalculations(item);
 
                                   return (
                                     <tr
@@ -2530,7 +2485,7 @@ export default function OfficeFieldCopyBidView() {
                                     </td>
                                     <td className="text-center">{item?.size}</td>
                                     <td className="text-center">
-                                      {item?.quantity ? item?.quantity : ""}
+                                      {qtyText || (item?.quantity ? item?.quantity : "")}
                                     </td>
                                     <td className="text-end pe-3 tabular-nums">
                                       {lineCost > 0
@@ -2559,13 +2514,12 @@ export default function OfficeFieldCopyBidView() {
                                         : ""}
                                     </td>
                                     <td className="text-end pe-3 tabular-nums">
-                                      {item?.totalPrice?.toLocaleString(
-                                        "en-US",
-                                        {
-                                          minimumFractionDigits: 2,
-                                          maximumFractionDigits: 2,
-                                        }
-                                      )}
+                                      {displayTotal > 0
+                                        ? displayTotal.toLocaleString("en-US", {
+                                            minimumFractionDigits: 2,
+                                            maximumFractionDigits: 2,
+                                          })
+                                        : ""}
                                     </td>
                                   </tr>
                                   );

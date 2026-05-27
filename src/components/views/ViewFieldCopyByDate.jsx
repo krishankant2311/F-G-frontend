@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Layout from "../layout/Layout";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
@@ -10,13 +10,21 @@ import parse from "html-react-parser";
 import fng_logo from "../../assets/images/fng_logo_black.png";
 import JoditEditor from "jodit-react";
 import {
+  buildLaborManHoursByJobType,
   formatFieldCopyAmount,
+  enrichFieldCopyDownloadCrewLabor,
+  getFieldCopyDownloadCrewLaborRowFields,
+  getFieldCopyLaborLineDisplayTotal,
   getFieldCopyLineDisplayCost,
-  getFieldCopyLineDisplayPrice,
+  getOfficeFieldCopyRowCalculations,
+  getFieldCopyPdfLaborManHours,
   getLaborPdfDescription,
-  shouldSkipAggregatedLaborPdfRow,
+  isFieldCopyCrewHoursAggregateLine,
+  isFieldCopyLaborContext,
+  isMongoObjectIdString,
+  resolveFieldCopyCrewUnitRate,
+  resolveFieldCopyDisplayJobType,
 } from "../../utils/fieldCopyLaborDisplay";
-import { finalizeLaborSummaryRow } from "../../utils/materialReference";
 
 export default function ViewFieldCopyByDate() {
   const { tableSize } = useTableContext();
@@ -37,6 +45,7 @@ export default function ViewFieldCopyByDate() {
   const [materialData, setMaterialData] = useState([]);
   const [laborData, setLaborData] = useState([]);
   const [fieldLaborData, setFieldLaborData] = useState([]);
+  const [apiOfficeDayLaborGroups, setApiOfficeDayLaborGroups] = useState([]);
   const [showPreviousData, setShowPreviousData] = useState(false);
   const [selectedCrews, setSelectedCrews] = useState([]);
   const [modalCrew, setModalCrew] = useState([]);
@@ -49,6 +58,453 @@ export default function ViewFieldCopyByDate() {
   const [foreman, setForeman] = useState("");
   const [projectManagers, setProjectManagers] = useState([]);
   const [allCrews, setAllCrews] = useState([]);
+
+  const displayJobType = useMemo(
+    () =>
+      resolveFieldCopyDisplayJobType({
+        jobType,
+        formDataJobType: formData?.jobType,
+      }),
+    [jobType, formData?.jobType]
+  );
+
+  const isFieldCopyLaborSummaryRow = (g) => {
+    if (!g) return false;
+    if (Number(g?.manHours) > 0) return true;
+    if (Number(g?.totalCost) > 0 && g?.jobType && !g?.reference) return true;
+    return false;
+  };
+
+  const findLaborRateForJobType = (jt) => {
+    if (!jt) return 0;
+    const rateSources = [
+      ...(Array.isArray(data?.copies) ? data.copies : []),
+      ...apiOfficeDayLaborGroups,
+    ];
+    for (const g of rateSources) {
+      const gjt = resolveFieldCopyDisplayJobType({
+        jobType: g?.jobType,
+        formDataJobType: formData?.jobType,
+      });
+      if (gjt === jt) {
+        const rate = resolveFieldCopyCrewUnitRate(g);
+        if (rate > 0) return rate;
+      }
+    }
+    const fromField = fieldLaborData.find(
+      (l) =>
+        resolveFieldCopyDisplayJobType({
+          jobType: l?.jobType,
+          formDataJobType: formData?.jobType,
+        }) === jt
+    );
+    const fromFieldRate = resolveFieldCopyCrewUnitRate(fromField);
+    if (fromFieldRate > 0) return fromFieldRate;
+
+    const fromLabor = Array.isArray(laborData)
+      ? laborData.find(
+          (l) =>
+            resolveFieldCopyDisplayJobType({
+              jobType: l?.jobType,
+              formDataJobType: formData?.jobType,
+            }) === jt
+        )
+      : null;
+    return resolveFieldCopyCrewUnitRate(fromLabor);
+  };
+
+  const crewLaborEnrichOptions = {
+    displayJobType,
+    formDataJobType: formData?.jobType,
+    resolveRateForJobType: findLaborRateForJobType,
+  };
+
+  const fieldCopyDownloadCrewManHours = useMemo(() => {
+    if (Array.isArray(data?.copies)) {
+      const fromCopies = data.copies
+        .filter(isFieldCopyLaborSummaryRow)
+        .reduce((acc, g) => acc + Number(g?.manHours || 0), 0);
+      if (fromCopies > 0) return fromCopies;
+    }
+    if (Number(data?.totalManHours) > 0) return Number(data.totalManHours);
+    if (Array.isArray(copies) && copies.length > 0) {
+      const copyHours = copies.reduce(
+        (acc, c) => acc + Number(c?.totalHours || 0),
+        0
+      );
+      if (copyHours > 0) return copyHours;
+    }
+    return 0;
+  }, [data?.copies, data?.totalManHours, copies]);
+
+  /** Line items from this specific field-copy entry (not whole office day). */
+  const fieldCopyEntryLineItems = useMemo(() => {
+    const lines = [];
+    const groups = Array.isArray(data?.copies) ? data.copies : [];
+    for (const group of groups) {
+      const groupJt = group?.jobType || group?.type;
+      if (!Array.isArray(group?.copies)) continue;
+      for (const item of group.copies) {
+        lines.push({
+          ...item,
+          source: item?.source || group?.source,
+          jobType: item?.jobType || item?.type || groupJt,
+          type: item?.type || groupJt,
+        });
+      }
+    }
+    return lines;
+  }, [data?.copies]);
+
+  /** Per-job-type labor for this field-copy entry (Drainage, Hardscape, Landscape, etc.). */
+  const fieldCopyDayLaborGroups = useMemo(() => {
+    const hoursFallback = Number(data?.totalManHours) || 0;
+    const entryGroups = Array.isArray(data?.copies) ? [...data.copies] : [];
+    const withHours = entryGroups.map((g) => ({
+      ...g,
+      manHours: Number(g.manHours) || 0,
+    }));
+    const sumMh = withHours.reduce((a, g) => a + g.manHours, 0);
+    if (hoursFallback > 0 && sumMh === 0) {
+      if (withHours.length === 1) {
+        withHours[0].manHours = hoursFallback;
+      } else if (withHours.length > 0) {
+        const pickIdx = (pred) =>
+          withHours.findIndex((g) => pred(String(g?.jobType || "")));
+        const drainageIdx = pickIdx((s) => s.toLowerCase().includes("drainage"));
+        const hardscapeIdx = pickIdx((s) => s.toLowerCase().includes("hardscape"));
+        const landscapeIdx = pickIdx((s) => s.toLowerCase().includes("landscape"));
+        const targetIdx =
+          drainageIdx >= 0
+            ? drainageIdx
+            : hardscapeIdx >= 0
+              ? hardscapeIdx
+              : landscapeIdx >= 0
+                ? landscapeIdx
+                : 0;
+        withHours[targetIdx].manHours = hoursFallback;
+      }
+    }
+
+    const fromEntry = withHours
+      .filter(
+        (g) =>
+          Number(g.manHours) > 0 ||
+          isFieldCopyLaborSummaryRow(g) ||
+          (Number(g.totalCost) > 0 && g.jobType)
+      )
+      .map((g) =>
+        enrichFieldCopyDownloadCrewLabor(
+          {
+            ...g,
+            jobType:
+              resolveFieldCopyDisplayJobType({
+                jobType: g?.jobType,
+                formDataJobType: formData?.jobType,
+              }) || g?.jobType,
+            isLaborTaxable: g?.isLaborTaxable ?? g?.isTaxable,
+          },
+          { ...crewLaborEnrichOptions, manHoursFallback: 0 }
+        )
+      )
+      .filter(Boolean);
+
+    if (fromEntry.length > 0) return fromEntry;
+
+    const rawGroups = [
+      ...(Array.isArray(data?.copies)
+        ? data.copies.filter(isFieldCopyLaborSummaryRow)
+        : []),
+      ...apiOfficeDayLaborGroups,
+    ];
+    if (!rawGroups.length) return [];
+    return rawGroups
+      .map((g) =>
+        enrichFieldCopyDownloadCrewLabor(
+          {
+            ...g,
+            jobType:
+              resolveFieldCopyDisplayJobType({
+                jobType: g?.jobType,
+                formDataJobType: formData?.jobType,
+              }) || displayJobType,
+            isLaborTaxable: g?.isLaborTaxable ?? g?.isTaxable,
+          },
+          { ...crewLaborEnrichOptions, manHoursFallback: hoursFallback }
+        )
+      )
+      .filter(Boolean);
+  }, [
+    data?.copies,
+    data?.totalManHours,
+    displayJobType,
+    formData?.jobType,
+    fieldLaborData,
+    laborData,
+    apiOfficeDayLaborGroups,
+    crewLaborEnrichOptions,
+  ]);
+
+  const laborManHoursByJobType = useMemo(() => {
+    const map = {};
+    for (const g of fieldCopyDayLaborGroups) {
+      const jt = String(g?.jobType || "")
+        .trim()
+        .toUpperCase();
+      const h = Number(g?.manHours || 0);
+      if (jt && h > 0) map[jt] = h;
+    }
+    const normalizedLabor = fieldLaborData.map((l) => ({
+      ...l,
+      jobType: isMongoObjectIdString(l?.jobType) ? displayJobType : l?.jobType,
+    }));
+    Object.assign(map, buildLaborManHoursByJobType(normalizedLabor));
+    return map;
+  }, [
+    fieldCopyDayLaborGroups,
+    fieldLaborData,
+    displayJobType,
+    fieldCopyDownloadCrewManHours,
+  ]);
+
+  const laborHourlyRateByJobType = useMemo(() => {
+    const map = {};
+    for (const g of fieldCopyDayLaborGroups) {
+      const jt = String(g?.jobType || "")
+        .trim()
+        .toUpperCase();
+      if (!jt) continue;
+      const rate = Number(g?.jobTypeCost || 0);
+      if (rate > 0) map[jt] = rate;
+    }
+    const normalizedLabor = fieldLaborData.map((l) => ({
+      ...l,
+      jobType: isMongoObjectIdString(l?.jobType) ? displayJobType : l?.jobType,
+    }));
+    for (const labor of normalizedLabor) {
+      const jt = String(labor?.jobType || "")
+        .trim()
+        .toUpperCase();
+      if (!jt || map[jt] > 0) continue;
+      const rate = Number(labor?.jobTypeCost) || 0;
+      if (rate > 0) map[jt] = rate;
+    }
+    for (const labor of normalizedLabor) {
+      const jt = String(labor?.jobType || "")
+        .trim()
+        .toUpperCase();
+      if (!jt || map[jt] > 0) continue;
+      const rate = resolveFieldCopyCrewUnitRate(labor);
+      if (rate > 0) map[jt] = rate;
+    }
+    if (Array.isArray(laborData)) {
+      for (const labor of laborData) {
+        const jt = resolveFieldCopyDisplayJobType({
+          jobType: labor?.jobType,
+          formDataJobType: formData?.jobType,
+        });
+        if (!jt || map[jt] > 0) continue;
+        const rate = resolveFieldCopyCrewUnitRate(labor);
+        if (rate > 0) map[jt] = rate;
+      }
+    }
+    if (displayJobType && !(map[displayJobType] > 0)) {
+      const fallback = findLaborRateForJobType(displayJobType);
+      if (fallback > 0) map[displayJobType] = fallback;
+    }
+    return map;
+  }, [
+    fieldCopyDayLaborGroups,
+    fieldLaborData,
+    displayJobType,
+    laborManHoursByJobType,
+    laborData,
+    formData?.jobType,
+  ]);
+
+  const workSummaryGridClass =
+    "grid grid-cols-[minmax(280px,36%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)] gap-x-2 gap-y-1";
+
+  const crewLaborTaxLabel = (labor) =>
+    formData?.customerType === "Normal"
+      ? labor?.isLaborTaxable
+        ? "RT"
+        : "RNT"
+      : formData?.customerType === "Commercial"
+        ? "CT"
+        : formData?.customerType?.toUpperCase() || "";
+
+  const taxEq = (a, b) => {
+    const x = a === true || a === "true";
+    const y = b === true || b === "true";
+    return x === y;
+  };
+
+  const jobTypeMatch = (a, b) =>
+    String(a ?? "")
+      .trim()
+      .toLowerCase() ===
+    String(b ?? "")
+      .trim()
+      .toLowerCase();
+
+  const lineItemCostSum = (item) => {
+    const lineCost = getFieldCopyLineDisplayCost(item);
+    if (lineCost > 0) return lineCost;
+    if (
+      item?.totalCost != null &&
+      item.totalCost !== "" &&
+      !Number.isNaN(Number(item.totalCost))
+    ) {
+      return Number(item.totalCost);
+    }
+    const c = item.cost;
+    const q =
+      item.quantity != null && item.quantity !== ""
+        ? Number(item.quantity)
+        : 1;
+    if (c != null && c !== "" && Number(c) > 0) {
+      return Number(c) * q;
+    }
+    return 0;
+  };
+
+  /** Work Summary COST — sum from entry line items (Office Copy pattern). */
+  const costFromFieldCopiesForRow = (row) => {
+    const pool =
+      fieldCopyEntryLineItems.length > 0
+        ? fieldCopyEntryLineItems
+        : fieldCopies;
+    if (!pool?.length || !row) return 0;
+    const rowJt = resolveFieldCopyDisplayJobType({
+      jobType: row.jobType,
+      formDataJobType: formData?.jobType,
+    });
+    let sum = 0;
+    for (const fc of pool) {
+      const fcJt = resolveFieldCopyDisplayJobType({
+        jobType: fc.jobType ?? fc.type,
+        formDataJobType: formData?.jobType,
+      });
+      if (!fcJt || !rowJt || !jobTypeMatch(fcJt, rowJt)) continue;
+
+      if (row.dataType !== "Labor") {
+        const rowCat =
+          row.source === "Labor" ? "Labor" : "F&G/Other/LumpSum";
+        const fcCat =
+          fc.source === "Labor" ? "Labor" : "F&G/Other/LumpSum";
+        if (fcCat !== rowCat) continue;
+        if (!taxEq(fc.isTaxable, row.isTaxable)) continue;
+        sum += lineItemCostSum(fc);
+      } else {
+        if (fc.source !== "Labor") continue;
+        const lt = fc.isLaborTaxable ?? fc.isTaxable;
+        if (!taxEq(lt, row.isLaborTaxable ?? row.isTaxable)) continue;
+        sum += lineItemCostSum(fc);
+      }
+    }
+    return sum;
+  };
+
+  const getFieldCopyWorkSummaryMaterialCost = (item) => {
+    const fromFc = costFromFieldCopiesForRow(item);
+    if (item?.dataType !== "Labor") {
+      return fromFc > 0 ? fromFc : Number(item?.totalCost) || 0;
+    }
+    return fromFc > 0
+      ? fromFc
+      : Number(item?.totalCost) ||
+          Number(item?.cost) ||
+          Number(item?.totalPrice) ||
+          0;
+  };
+
+  /** Same inclusion rules as the main table crew rows. */
+  const isFieldCopyCrewLaborRowVisible = (labor) => {
+    const hours = getFieldCopyPdfLaborManHours(
+      labor,
+      laborManHoursByJobType
+    );
+    return (
+      hours > 0 ||
+      Number(labor?.totalPrice) > 0 ||
+      Number(labor?.totalCost) > 0
+    );
+  };
+
+  const getFieldCopyDownloadCrewLaborSources = () => {
+    const hoursFallback = fieldCopyDownloadCrewManHours;
+    const enrichOpts = { ...crewLaborEnrichOptions, manHoursFallback: hoursFallback };
+
+    if (fieldCopyDayLaborGroups.length > 0) return fieldCopyDayLaborGroups;
+
+    if (displayJobType && hoursFallback > 0) {
+      const rate = findLaborRateForJobType(displayJobType);
+      const enriched = enrichFieldCopyDownloadCrewLabor(
+        {
+          jobType: displayJobType,
+          manHours: hoursFallback,
+          jobTypeCost: rate,
+          isLaborTaxable: laborData?.find(
+            (l) =>
+              resolveFieldCopyDisplayJobType({
+                jobType: l?.jobType,
+                formDataJobType: formData?.jobType,
+              }) === displayJobType
+          )?.isLaborTaxable,
+        },
+        enrichOpts
+      );
+      if (enriched) return [enriched];
+    }
+
+    const fromField = fieldLaborData
+      .map((l) =>
+        enrichFieldCopyDownloadCrewLabor(
+          {
+            ...l,
+            jobType: isMongoObjectIdString(l?.jobType)
+              ? displayJobType
+              : l?.jobType,
+          },
+          enrichOpts
+        )
+      )
+      .filter(Boolean);
+
+    if (fromField.length > 0) return fromField;
+
+    return [];
+  };
+
+  const fieldCopyPdfCrewWorkSummaryRows = useMemo(() => {
+    return getFieldCopyDownloadCrewLaborSources()
+      .filter(isFieldCopyCrewLaborRowVisible)
+      .map((labor) => ({
+        labor,
+        row: getFieldCopyDownloadCrewLaborRowFields(
+          labor,
+          laborManHoursByJobType,
+          laborHourlyRateByJobType,
+          formData?.jobType,
+          findLaborRateForJobType
+        ),
+      }))
+      .filter(
+        ({ row }) =>
+          row.manHours > 0 || row.displayTotal > 0 || row.lineCost > 0
+      );
+  }, [
+    fieldCopyDayLaborGroups,
+    fieldCopyDownloadCrewManHours,
+    displayJobType,
+    fieldLaborData,
+    laborData,
+    laborManHoursByJobType,
+    laborHourlyRateByJobType,
+    formData?.jobType,
+    apiOfficeDayLaborGroups,
+  ]);
 
   // console.log("data", showPreviousData,data);
 
@@ -103,11 +559,23 @@ export default function ViewFieldCopyByDate() {
     let hasValidCost = false;
 
     fieldCopies.forEach((item) => {
-      // COST = per-unit cost × quantity (sirf item.cost se, Office Copy jaisa)
-      if (item.cost !== null && item.cost !== undefined && item.cost !== "" && Number(item.cost) > 0) {
-        const qty = Number(item.quantity || 1);
-        const unitCost = Number(item.cost);
-        calculatedCost += unitCost * qty;
+      const lineCost = getFieldCopyLineDisplayCost(item);
+      if (lineCost > 0) {
+        calculatedCost += lineCost;
+        hasValidCost = true;
+      }
+    });
+
+    getFieldCopyDownloadCrewLaborSources().forEach((labor) => {
+      const row = getFieldCopyDownloadCrewLaborRowFields(
+        labor,
+        laborManHoursByJobType,
+        laborHourlyRateByJobType,
+        formData?.jobType,
+        findLaborRateForJobType
+      );
+      if (row.lineCost > 0) {
+        calculatedCost += row.lineCost;
         hasValidCost = true;
       }
     });
@@ -119,7 +587,20 @@ export default function ViewFieldCopyByDate() {
 
     setCost(hasValidCost ? calculatedCost : null);
     setMarkup(calculatedMarkup);
-  }, [fieldCopies, materialsTotal, laborTotal, formData?.taxCredits, formData?.nonTaxCredits]);
+  }, [
+    fieldCopies,
+    materialsTotal,
+    laborTotal,
+    formData?.taxCredits,
+    formData?.nonTaxCredits,
+    fieldCopyDayLaborGroups,
+    laborManHoursByJobType,
+    laborHourlyRateByJobType,
+    displayJobType,
+    fieldCopyDownloadCrewManHours,
+    laborData,
+    fieldLaborData,
+  ]);
 
   useEffect(() => {
     let taxAmount = 0;
@@ -501,6 +982,20 @@ export default function ViewFieldCopyByDate() {
         let resultedLabors = categorizeLabor(allLaborData);
 
         setFieldCopies(resultedCopies);
+
+        const officeEntries = [
+          ...(response.data.result.officeFieldCopies || []),
+          ...(response.data.result.officeDraftCopies || []),
+        ];
+        const entryKey = String(data?.entryDate || "").trim();
+        const matchedOffice = officeEntries.find(
+          (e) => String(e?.entryDate || "").trim() === entryKey
+        );
+        const apiLabor = Array.isArray(matchedOffice?.fieldCopies)
+          ? matchedOffice.fieldCopies.filter(isFieldCopyLaborSummaryRow)
+          : [];
+        setApiOfficeDayLaborGroups(apiLabor);
+
         setMaterialData(resultedMaterials);
         setLaborData(resultedLabors);
         setMaterialLaborData(
@@ -537,6 +1032,7 @@ export default function ViewFieldCopyByDate() {
           category, // Store the category
           jobType: item.jobType,
           totalPrice: 0,
+          totalCost: 0,
           isTaxable: item.isTaxable,
           source: item.source,
           dataType: item.dataType,
@@ -545,6 +1041,7 @@ export default function ViewFieldCopyByDate() {
 
       // Sum up the totalPrice for the current category & jobType
       result[key].totalPrice += item.totalPrice;
+      result[key].totalCost += lineItemCostSum(item);
 
       return result;
     }, {});
@@ -664,6 +1161,9 @@ export default function ViewFieldCopyByDate() {
           reference: item.reference,
           description: item.description,
           size: item.measure,
+          type: item.type,
+          jobType: item.jobType || item.type,
+          manHours: item.manHours,
           quantity: 0,
           price: item.price,
           totalPrice: 0,
@@ -678,7 +1178,7 @@ export default function ViewFieldCopyByDate() {
       // aggregate quantity, selling price and cost
       summary[key].quantity += Number(item.quantity || 0);
       summary[key].totalPrice += Number(item.totalPrice || 0);
-      summary[key].totalCost += Number(item.totalCost || item.cost || 0);
+      summary[key].totalCost += getFieldCopyLineDisplayCost(item);
       if (summary[key].cost === undefined && item.cost !== undefined && item.cost !== null) {
         summary[key].cost = Number(item.cost);
       }
@@ -686,12 +1186,50 @@ export default function ViewFieldCopyByDate() {
         summary[key].markup = Number(item.markup ?? item.markUp);
         summary[key].markUp = Number(item.markUp ?? item.markup);
       }
+      if (!summary[key].source && item?.source) {
+        summary[key].source = item.source;
+      }
+      if (!summary[key].type && item?.type) {
+        summary[key].type = item.type;
+      }
     });
 
-    return Object.values(summary).map((row) =>
-      row.source === "Labor" ? finalizeLaborSummaryRow(row) : row
-    );
+    return Object.values(summary);
   };
+
+  const fieldCopyPdfTableItems = useMemo(() => {
+    if (fieldCopyEntryLineItems.length > 0) {
+      return summarizeFieldCopies(fieldCopyEntryLineItems);
+    }
+    return categorizedFieldCopies?.[0]?.items ?? [];
+  }, [fieldCopyEntryLineItems, categorizedFieldCopies, fieldCopies]);
+
+  const fieldCopyPdfWorkSummaryMaterials = useMemo(() => {
+    if (fieldCopyEntryLineItems.length > 0) {
+      const mats = fieldCopyEntryLineItems
+        .filter(
+          (i) =>
+            !isFieldCopyCrewHoursAggregateLine(i, fieldCopyDownloadCrewManHours)
+        )
+        .map((i) => ({
+          ...i,
+          dataType: "Material",
+          jobType: resolveFieldCopyDisplayJobType({
+            jobType: i?.jobType || i?.type,
+            formDataJobType: formData?.jobType,
+          }),
+          totalPrice: Number(i.totalPrice) || 0,
+        }));
+      if (mats.length > 0) return categorizeMaterial(mats);
+    }
+    return (materialLaborData || []).filter((i) => i?.dataType === "Material");
+  }, [
+    fieldCopyEntryLineItems,
+    materialLaborData,
+    formData?.jobType,
+    fieldCopyDownloadCrewManHours,
+  ]);
+
   function convertMillisecondsToDate(ms) {
     ms = Number.parseInt(ms);
     const date = new Date(ms);
@@ -1177,12 +1715,9 @@ const handleInvoiceJobType = (jobType) => {
             {/* Office Copies Data */}
             {/* Compiled data by Material */}
             <div className="w-full mt-3 text-[15px] overflow-x-scroll">
-              {categorizedFieldCopies.length > 0 || laborData.length > 0 ? (
-                categorizedFieldCopies.map((group, index) => (
-                  <div key={index} className="mb-0">
-                    {/* <h4 className="font-bold text-[15px] mb-3">
-                            {group.category}
-                          </h4> */}
+              {fieldCopyPdfTableItems.length > 0 ||
+              getFieldCopyDownloadCrewLaborSources().length > 0 ? (
+                  <div className="mb-0">
                     <table className="w-full text-xs">
                       <thead className="">
                         <tr>
@@ -1222,13 +1757,23 @@ const handleInvoiceJobType = (jobType) => {
                         </tr>
                       </thead>
                       <tbody>
-                        {group &&
-                          group.items &&
-                          group.items.length > 0 &&
-                          group.items.map((item, idx) => {
-                            const lineCost = getFieldCopyLineDisplayCost(item);
-                            const displayPrice = getFieldCopyLineDisplayPrice(item);
-                            const markupVal = item?.markup ?? item?.markUp ?? null;
+                        {fieldCopyPdfTableItems.length > 0 &&
+                          fieldCopyPdfTableItems.map((item, idx) => {
+                            if (
+                              isFieldCopyCrewHoursAggregateLine(
+                                item,
+                                fieldCopyDownloadCrewManHours
+                              )
+                            ) {
+                              return null;
+                            }
+                            const {
+                              lineCost,
+                              displayPrice,
+                              markupVal,
+                              displayTotal,
+                              qtyText,
+                            } = getOfficeFieldCopyRowCalculations(item);
                             return (
                             <tr key={idx}>
                               {/* <td className="text-xs">{item?.source}</td> */}
@@ -1236,8 +1781,10 @@ const handleInvoiceJobType = (jobType) => {
                                 {item?.source === "Labor"
                                   ? getLaborPdfDescription({
                                       labor: item,
-                                      groupItems: group?.items,
-                                      fieldCopies,
+                                      groupItems: fieldCopyPdfTableItems,
+                                      fieldCopies: fieldCopyEntryLineItems.length
+                                        ? fieldCopyEntryLineItems
+                                        : fieldCopies,
                                     })?.toUpperCase()
                                   : item?.reference?.toUpperCase()}
                               </td>
@@ -1246,7 +1793,7 @@ const handleInvoiceJobType = (jobType) => {
                               </td>
                               <td className="text-xs">{item?.size}</td>
                               <td className="text-xs pl-4">
-                                {item?.quantity ? item.quantity : ""}
+                                {qtyText || (item?.quantity ? item.quantity : "")}
                               </td>
                               <td className="text-xs">
                                 {lineCost > 0 ? formatFieldCopyAmount(lineCost) : ""}
@@ -1270,14 +1817,71 @@ const handleInvoiceJobType = (jobType) => {
                                 <b>$</b>
                                 <span className="w-[80px] inline-block">
                                   {" "}
-                                  {item?.totalPrice?.toLocaleString("en-US", {
-                                    minimumFractionDigits: 2,
-                                    maximumFractionDigits: 2,
-                                  })}
+                                  {displayTotal > 0
+                                    ? formatFieldCopyAmount(displayTotal)
+                                    : ""}
                                 </span>
                               </td>
                             </tr>
                           );
+                          })}
+                        {getFieldCopyDownloadCrewLaborSources()
+                          .filter(isFieldCopyCrewLaborRowVisible)
+                          .map((labor, laborIdx) => {
+                            const row = getFieldCopyDownloadCrewLaborRowFields(
+                              labor,
+                              laborManHoursByJobType,
+                              laborHourlyRateByJobType,
+                              formData?.jobType,
+                              findLaborRateForJobType
+                            );
+                            if (!(row.manHours > 0) && !(row.displayTotal > 0)) {
+                              return null;
+                            }
+                            return (
+                              <tr key={`field-labor-${laborIdx}`}>
+                                <td className="text-xs pr-2">
+                                  {row.description}
+                                </td>
+                                <td className="text-xs" />
+                                <td className="text-xs">
+                                  {labor?.size || labor?.measure || ""}
+                                </td>
+                                <td className="text-xs pl-4">{row.qtyText}</td>
+                                <td className="text-xs">
+                                  {row.lineCost > 0
+                                    ? formatFieldCopyAmount(row.lineCost)
+                                    : ""}
+                                </td>
+                                <td className="text-xs">
+                                  {row.markupVal != null &&
+                                  row.markupVal !== ""
+                                    ? Number(row.markupVal).toLocaleString(
+                                        "en-US",
+                                        {
+                                          minimumFractionDigits: 0,
+                                          maximumFractionDigits: 2,
+                                        }
+                                      ) + "%"
+                                    : ""}
+                                </td>
+                                <td className="text-xs">
+                                  {row.displayPrice != null &&
+                                  row.displayPrice > 0
+                                    ? formatFieldCopyAmount(row.displayPrice)
+                                    : ""}
+                                </td>
+                                <td className="text-xs text-end">
+                                  <b>$</b>
+                                  <span className="w-[80px] inline-block">
+                                    {" "}
+                                    {row.displayTotal > 0
+                                      ? formatFieldCopyAmount(row.displayTotal)
+                                      : ""}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
                           })}
                         {/* <tr>
                                 <td colSpan="3" className="font-bold">
@@ -1311,7 +1915,6 @@ const handleInvoiceJobType = (jobType) => {
                       </tbody>
                     </table>
                   </div>
-                ))
               ) : (
                 <p className="pb-2">No field copies available.</p>
               )}
@@ -1342,46 +1945,6 @@ const handleInvoiceJobType = (jobType) => {
               </table> */}
 
 
-              <table className="w-full text-xs">
-                <tbody>
-                  {laborData
-                    .filter((labor) => labor.totalPrice !== 0)
-                    .filter(
-                      (labor) =>
-                        !shouldSkipAggregatedLaborPdfRow(
-                          labor,
-                          categorizedFieldCopies?.[0]?.items,
-                          fieldCopies
-                        )
-                    )
-                    .map((labor) => {
-                      return (
-                        <tr className="">
-                          <td className="">
-                            <p>
-                              {getLaborPdfDescription({
-                                labor,
-                                groupItems:
-                                  categorizedFieldCopies?.[0]?.items,
-                                fieldCopies,
-                              })?.toUpperCase()}
-                            </p>
-                          </td>
-                          <td className="text-xs text-end">
-                            <b>$</b>
-                            <span className="w-[80px] inline-block">
-                              {" "}
-                              {labor?.totalPrice?.toLocaleString("en-US", {
-                                minimumFractionDigits: 2,
-                                maximumFractionDigits: 2,
-                              })}
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                </tbody>
-              </table>
             </div>
             <div className="mt-2">
               <h4 className="text-[15px] font-semibold text-center mb-6">
@@ -1389,95 +1952,103 @@ const handleInvoiceJobType = (jobType) => {
               </h4>
             </div>
 
-            {/* Compiled data by Job Type */}
-            <div className="mt-4 text-xs tracking-wide">
-              {materialLaborData.map((item) => {
-                if (item.dataType === "Material") {
-                  return (
-                    <div className="flex justify-between mt-1 capitalize">
-                      <span>
-                        <b className="w-[200px] inline-block">
-                          {item.source === "Labor"
-                            ? getLaborPdfDescription({
-                                labor: item,
-                                groupItems:
-                                  categorizedFieldCopies?.[0]?.items,
-                                fieldCopies,
-                              })?.toUpperCase()
-                            : `${typeof item?.jobType === "string"
-                                ? item.jobType.toUpperCase()
-                                : String(item?.jobType || "").toUpperCase()} ${handleInvoiceJobType(item.jobType)}`.trim()}
-                        </b>
-                        <b>
-                          {formData?.customerType === "Normal"
-                            ? ["Labor", "Other"].includes(item.source)
-                              ? item.isTaxable
-                                ? "RT"
-                                : "RNT"
-                              : ["Lump Sum"].includes(item.source)
-                                ? `${item.isTaxable ? "RT" : "RNT"
-                                } (SALES TAX PAID ON MATERIAL)`
-                                : "RT"
-                            : formData.customerType === "Commercial"
-                              ? "CT"
-                              : formData?.customerType?.toUpperCase()}
-                        </b>
-                      </span>
-                      <span>
-                        <b>$</b>{" "}
-                        <span className="inline-block w-[80px] text-end">
-                          {item.totalPrice?.toLocaleString("en-US", {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </span>
-                      </span>
-                    </div>
-                  );
-                } else {
-                  if (
-                    item.totalPrice > 0 &&
-                    !shouldSkipAggregatedLaborPdfRow(
-                      item,
-                      categorizedFieldCopies?.[0]?.items,
-                      fieldCopies
-                    )
-                  ) {
-                    return (
-                      <div className="flex justify-between mt-1">
-                        <span>
-                          <b className="w-[200px] inline-block">
-                            {getLaborPdfDescription({
-                              labor: item,
-                              groupItems:
-                                categorizedFieldCopies?.[0]?.items,
-                              fieldCopies,
-                            })?.toUpperCase()}
-                          </b>
-                          <b>
-                            {formData?.customerType === "Normal"
-                              ? item.isLaborTaxable
-                                ? "RT"
-                                : "RNT"
-                              : formData.customerType === "Commercial"
-                                ? "CT"
-                                : formData?.customerType?.toUpperCase()}
-                          </b>
-                        </span>
-                        <span>
+            {/* Work Summary — Office Copy style (COST + $ columns) */}
+            <div className="mt-4 text-xs tracking-wide w-full">
+              <div
+                className={`${workSummaryGridClass} mb-1 font-semibold uppercase items-baseline`}
+              >
+                <span className="col-span-3 min-w-0" />
+                <span className="text-end whitespace-nowrap">COST</span>
+                <span className="min-w-0" aria-hidden />
+                <span className="min-w-0" aria-hidden />
+                <span className="text-end whitespace-nowrap">$</span>
+              </div>
+              {fieldCopyPdfWorkSummaryMaterials.map((item) => {
+                const rowCost = getFieldCopyWorkSummaryMaterialCost(item);
+                const label =
+                  item.source === "Labor"
+                    ? getLaborPdfDescription({
+                        labor: item,
+                        groupItems: fieldCopyPdfTableItems,
+                        fieldCopies: fieldCopyEntryLineItems.length
+                          ? fieldCopyEntryLineItems
+                          : fieldCopies,
+                      })?.toUpperCase()
+                    : `${resolveFieldCopyDisplayJobType({
+                        jobType: item?.jobType,
+                        formDataJobType: formData?.jobType,
+                      })} ${handleInvoiceJobType(item.jobType)}`.trim();
+                return (
+                  <div
+                    key={`fc-ws-m-${item.jobType}-${item.source}-${item.isTaxable}`}
+                    className={`${workSummaryGridClass} mt-1 capitalize items-baseline`}
+                  >
+                    <span className="col-span-3 min-w-0">
+                      <b className="w-[200px] inline-block">{label}</b>
+                      <b>
+                        {formData?.customerType === "Normal"
+                          ? ["Labor", "Other"].includes(item.source)
+                            ? item.isTaxable
+                              ? "RT"
+                              : "RNT"
+                            : ["Lump Sum"].includes(item.source)
+                              ? `${item.isTaxable ? "RT" : "RNT"} (SALES TAX PAID ON MATERIAL)`
+                              : "RT"
+                          : formData.customerType === "Commercial"
+                            ? "CT"
+                            : formData?.customerType?.toUpperCase()}
+                      </b>
+                    </span>
+                    <span className="text-end tabular-nums whitespace-nowrap">
+                      {rowCost > 0 ? (
+                        <>
                           <b>$</b>{" "}
-                          <span className="inline-block w-[80px] text-end">
-                            {item.totalPrice?.toLocaleString("en-US", {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })}
-                          </span>
-                        </span>
-                      </div>
-                    );
-                  }
-                }
+                          {formatFieldCopyAmount(rowCost)}
+                        </>
+                      ) : (
+                        ""
+                      )}
+                    </span>
+                    <span className="min-w-0" aria-hidden />
+                    <span className="min-w-0" aria-hidden />
+                    <span className="text-end tabular-nums whitespace-nowrap">
+                      <b>$</b>{" "}
+                      {item.totalPrice?.toLocaleString("en-US", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </span>
+                  </div>
+                );
               })}
+              {fieldCopyPdfCrewWorkSummaryRows.map(({ labor, row }, idx) => (
+                <div
+                  key={`fc-ws-crew-${row.description}-${idx}`}
+                  className={`${workSummaryGridClass} mt-1 items-baseline`}
+                >
+                  <span className="col-span-3 min-w-0">
+                    <b className="w-[200px] inline-block">{row.description}</b>
+                    <b>{crewLaborTaxLabel(labor)}</b>
+                  </span>
+                  <span className="text-end tabular-nums whitespace-nowrap">
+                    {row.lineCost > 0 ? (
+                      <>
+                        <b>$</b> {formatFieldCopyAmount(row.lineCost)}
+                      </>
+                    ) : (
+                      ""
+                    )}
+                  </span>
+                  <span className="min-w-0" aria-hidden />
+                  <span className="min-w-0" aria-hidden />
+                  <span className="text-end tabular-nums whitespace-nowrap">
+                    <b>$</b>{" "}
+                    {row.displayTotal > 0
+                      ? formatFieldCopyAmount(row.displayTotal)
+                      : ""}
+                  </span>
+                </div>
+              ))}
             </div>
 
             {/* Invoice Summary */}

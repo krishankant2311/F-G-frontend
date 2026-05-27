@@ -39,22 +39,39 @@ export function applyReferenceVendorToForm(form) {
 
 /**
  * Field Copy line with source "Other":
- * - User enters unit **Price** (sell / correct price, e.g. 30).
- * - **Cost** = half of that price (e.g. 15).
- * - `totalCost` = unit cost × qty; `totalPrice` = unit price × qty.
+ * - Default: unit **Price** drives **Cost** (cost = price ÷ 2).
+ * - When user edits **Cost**: price = cost × 2.
+ * - `syncFrom`: "price" | "cost" | "preserve" (only line totals).
  */
-export function recalcOtherFieldCopyLine(form) {
+export function recalcOtherFieldCopyLine(form, syncFrom = "price") {
   if (!form || form.source !== "Other") return { ...form };
   const f = { ...form };
   const qty = parseFloat(f.quantity) || 0;
-  const markupPct = parseFloat(f.markup ?? f.markUp) || 0;
-  const unitSell = parseFloat(f.price) || 0;
-  const unitCost =
-    unitSell > 0 ? Math.round((unitSell / 2) * 10000) / 10000 : 0;
-  f.cost = unitCost > 0 ? unitCost : "";
-  f.markUp = markupPct;
-  f.markup = markupPct;
-  f.unitSellPrice = Number.isFinite(unitSell) ? unitSell : "";
+
+  let unitCost = parseFloat(f.cost) || 0;
+  let unitSell = parseFloat(f.price) || 0;
+
+  if (syncFrom === "cost") {
+    unitCost = parseFloat(f.cost) || 0;
+    unitSell =
+      unitCost > 0 ? Math.round(unitCost * 2 * 10000) / 10000 : 0;
+    f.cost = unitCost > 0 ? unitCost : "";
+    f.price = unitSell > 0 ? unitSell : "";
+  } else if (syncFrom === "price") {
+    unitSell = parseFloat(f.price) || 0;
+    unitCost =
+      unitSell > 0 ? Math.round((unitSell / 2) * 10000) / 10000 : 0;
+    f.cost = unitCost > 0 ? unitCost : "";
+    f.price = unitSell > 0 ? unitSell : f.price;
+  }
+
+  if (unitCost > 0 && unitSell > 0) {
+    const autoMarkup = ((unitSell - unitCost) / unitCost) * 100;
+    f.markup = Math.round(autoMarkup * 100) / 100;
+    f.markUp = f.markup;
+  }
+
+  f.unitSellPrice = unitSell > 0 ? unitSell : "";
   if (qty > 0 && unitSell > 0 && unitCost > 0) {
     f.totalCost = Math.round(unitCost * qty * 100) / 100;
     f.totalPrice = Math.round(unitSell * qty * 100) / 100;
@@ -166,10 +183,13 @@ export function toPersistedCopy(form) {
   if (rest.source === "Other") {
     const { unitSellPrice: _drop, ...base } = rest;
     const unitSell = parseFloat(base.price) || 0;
+    const storedCost = parseFloat(base.cost) || 0;
     const unitCost =
-      unitSell > 0
-        ? Math.round((unitSell / 2) * 10000) / 10000
-        : parseFloat(base.cost) || 0;
+      storedCost > 0
+        ? storedCost
+        : unitSell > 0
+          ? Math.round((unitSell / 2) * 10000) / 10000
+          : 0;
     return {
       ...base,
       cost: unitCost,

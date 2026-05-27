@@ -289,6 +289,13 @@ export default function AddFieldCopyForm() {
       updatedForm.totalPrice = cost + (cost * markupPercent) / 100;
     }
 
+    if (name === "cost" && updatedForm.source === "Other") {
+      Object.assign(
+        updatedForm,
+        recalcOtherFieldCopyLine(updatedForm, "cost")
+      );
+    }
+
     // Calculate total price if both price and quantity are filled
     if (name === "price" || name === "quantity") {
       const price = parseFloat(updatedForm.price) || 0;
@@ -296,7 +303,10 @@ export default function AddFieldCopyForm() {
       if (updatedForm.source === "Other") {
         Object.assign(
           updatedForm,
-          recalcOtherFieldCopyLine(updatedForm)
+          recalcOtherFieldCopyLine(
+            updatedForm,
+            name === "quantity" ? "preserve" : "price"
+          )
         );
       } else {
         if (updatedForm.source === "F&G") {
@@ -317,7 +327,7 @@ export default function AddFieldCopyForm() {
       if (updatedForm.source === "Other") {
         Object.assign(
           updatedForm,
-          recalcOtherFieldCopyLine(updatedForm)
+          recalcOtherFieldCopyLine(updatedForm, "preserve")
         );
       } else {
         let costBase;
@@ -345,7 +355,7 @@ export default function AddFieldCopyForm() {
       if (updatedForm.source === "Other") {
         Object.assign(
           updatedForm,
-          recalcOtherFieldCopyLine(updatedForm)
+          recalcOtherFieldCopyLine(updatedForm, "preserve")
         );
       } else {
         const markup = parseFloat(updatedForm.markup) || 0;
@@ -1634,15 +1644,17 @@ export default function AddFieldCopyForm() {
                             Cost *
                           </label>
                           <input
-                            type="text"
-                            className="border-b border-[grey] outline-none bg-gray-50"
+                            type="number"
+                            className="border-b border-[grey] outline-none w-[180px]"
                             id={`cost-other-${index}`}
                             key={`cost-other-${index}-${formData.source}`}
                             name="cost"
                             placeholder="Enter Cost"
                             onChange={(e) => handleInputChange(e, index)}
                             value={otherFieldCopyCostDisplayValue(formData.cost)}
-                            readOnly
+                            min={0}
+                            max={10000000}
+                            step="any"
                             required
                           />
                         </div>
