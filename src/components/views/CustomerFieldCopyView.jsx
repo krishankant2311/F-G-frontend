@@ -17,6 +17,7 @@ import {
   getOfficeFieldCopyLineCost,
   getOfficeFieldCopyRowCalculations,
   getCustomerCopyDisplayDescription,
+  getCustomerCopyMaterialsTableMergeKey,
   isFieldCopyLaborContext,
   lookupJobTypeCatalogRate,
   lookupLaborMapValue,
@@ -634,13 +635,187 @@ Approved by: __________________  Date: ____________________`,
     return isFieldCopyLaborContext(item);
   };
 
+  /** Materials & Other — merge labor rows when display description is exactly the same. */
+  const customerCopyMergedTableRows = useMemo(() => {
+    const entries = [];
+    for (const item of categorizedFieldCopies?.[0]?.items ?? []) {
+      entries.push({ kind: "item", item });
+    }
+    for (const labor of fieldLaborData || []) {
+      if (!(Number(labor?.totalPrice) !== 0)) continue;
+      const crewFields = getOfficeFieldCopyCrewLaborRowFields(
+        labor,
+        laborManHoursByJobType,
+        laborHourlyRateByJobType,
+        formData?.jobType,
+        findLaborRateForJobType
+      );
+      if (!(crewFields.displayTotal > 0) && !(crewFields.lineCost > 0)) {
+        continue;
+      }
+      entries.push({ kind: "crew", labor, crewFields });
+    }
+
+    const entryMergeItem = (entry) => {
+      if (entry.kind === "crew") {
+        return {
+          dataType: "Labor",
+          source: "Labor",
+          jobType: entry.labor?.jobType,
+          reference: entry.crewFields.description,
+        };
+      }
+      return entry.item;
+    };
+
+    const entryCalc = (entry) => {
+      if (entry.kind === "crew") {
+        return {
+          lineCost: entry.crewFields.lineCost,
+          displayPrice: entry.crewFields.displayPrice,
+          markupVal: entry.crewFields.markupVal,
+          displayTotal: entry.crewFields.displayTotal,
+          qtyText: entry.crewFields.qtyText,
+        };
+      }
+      return getOfficeFieldCopyRowCalculations(entry.item);
+    };
+
+    const laborGroups = new Map();
+    for (const entry of entries) {
+      const mergeKey = getCustomerCopyMaterialsTableMergeKey(entryMergeItem(entry));
+      if (!mergeKey) continue;
+
+      const calc = entryCalc(entry);
+      const description = getCustomerCopyDisplayDescription(entryMergeItem(entry));
+      const size =
+        entry.kind === "crew" ? entry.labor?.size || "" : entry.item?.size || "";
+      const qtyN = calc.qtyText ? parseFloat(calc.qtyText) || 0 : 0;
+
+      if (!laborGroups.has(mergeKey)) {
+        laborGroups.set(mergeKey, {
+          kind: "merged-labor",
+          description,
+          size,
+          calc: { ...calc },
+          qtySum: qtyN,
+        });
+      } else {
+        const g = laborGroups.get(mergeKey);
+        g.calc.lineCost =
+          (Number(g.calc.lineCost) || 0) + (Number(calc.lineCost) || 0);
+        g.calc.displayTotal =
+          (Number(g.calc.displayTotal) || 0) + (Number(calc.displayTotal) || 0);
+        g.qtySum = (g.qtySum || 0) + qtyN;
+        if (!g.size && size) g.size = size;
+      }
+    }
+
+    for (const g of laborGroups.values()) {
+      const lc = Number(g.calc.lineCost) || 0;
+      const dt = Number(g.calc.displayTotal) || 0;
+      if (lc > 0 && dt > 0) {
+        g.calc.markupVal = Math.round(((dt / lc - 1) * 100) * 100) / 100;
+      }
+      if (g.qtySum > 0) {
+        g.calc.qtyText = Number.isInteger(g.qtySum)
+          ? String(g.qtySum)
+          : g.qtySum.toLocaleString("en-US", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            });
+        if (dt > 0) {
+          g.calc.displayPrice = Math.round((dt / g.qtySum) * 100) / 100;
+        }
+      }
+    }
+
+    const seenKeys = new Set();
+    const ordered = [];
+    for (const entry of entries) {
+      const mergeKey = getCustomerCopyMaterialsTableMergeKey(entryMergeItem(entry));
+      if (!mergeKey) {
+        ordered.push(entry);
+        continue;
+      }
+      if (seenKeys.has(mergeKey)) continue;
+      seenKeys.add(mergeKey);
+      const merged = laborGroups.get(mergeKey);
+      if (merged) ordered.push(merged);
+    }
+    return ordered;
+  }, [
+    categorizedFieldCopies,
+    fieldLaborData,
+    formData?.jobType,
+    laborManHoursByJobType,
+    laborHourlyRateByJobType,
+    findLaborRateForJobType,
+  ]);
+
   const renderCustomerCopyTableBody = (variant = "view") => {
     const isPdf = variant === "pdf";
-    const items = categorizedFieldCopies?.[0]?.items ?? [];
 
     return (
       <>
-        {items.map((item, idx) => {
+        {customerCopyMergedTableRows.map((row, idx) => {
+          if (row.kind === "merged-labor") {
+            const d = row.calc;
+            const hidePdfLaborQty = isPdf;
+            return (
+              <tr key={`${variant}-merged-labor-${idx}`}>
+                <td
+                  className={isPdf ? "text-xs w-[400px] pr-2" : "w-[400px] pr-2"}
+                  style={isPdf ? { textAlign: "left" } : undefined}
+                >
+                  {isPdf ? row.description : <p className="m-0">{row.description}</p>}
+                </td>
+                <td
+                  className={isPdf ? "text-xs" : undefined}
+                  style={isPdf ? { textAlign: "center" } : undefined}
+                >
+                  {row.size || ""}
+                </td>
+                <td
+                  className={isPdf ? "text-xs" : undefined}
+                  style={isPdf ? { textAlign: "center" } : undefined}
+                >
+                  {!hidePdfLaborQty && d.qtyText ? d.qtyText : ""}
+                </td>
+                {!isPdf && (
+                  <td>{d.lineCost > 0 ? formatMoney(d.lineCost) : ""}</td>
+                )}
+                {!isPdf && (
+                  <td>
+                    {d.markupVal !== null &&
+                    d.markupVal !== undefined &&
+                    d.markupVal !== ""
+                      ? Number(d.markupVal).toLocaleString("en-US", {
+                          minimumFractionDigits: 0,
+                          maximumFractionDigits: 2,
+                        }) + "%"
+                      : ""}
+                  </td>
+                )}
+                <td
+                  className={isPdf ? "text-xs" : undefined}
+                  style={isPdf ? { textAlign: "right" } : undefined}
+                >
+                  {d.displayPrice != null && d.displayPrice > 0
+                    ? formatMoney(d.displayPrice)
+                    : ""}
+                </td>
+                <td
+                  className={isPdf ? "text-xs" : undefined}
+                  style={isPdf ? { textAlign: "right" } : undefined}
+                >
+                  {d.displayTotal > 0 ? formatMoney(d.displayTotal) : ""}
+                </td>
+              </tr>
+            );
+          }
+
+          const item = row.item;
           const d = getPdfItemDisplayFields(item);
           const hidePdfLaborQty =
             isPdf && shouldHideCustomerCopyPdfLaborQuantity(item);
@@ -701,87 +876,6 @@ Approved by: __________________  Date: ____________________`,
             </tr>
           );
         })}
-        {fieldLaborData
-          .filter((labor) => labor.totalPrice !== 0)
-          .map((labor, idx) => {
-            const row = getOfficeFieldCopyCrewLaborRowFields(
-              labor,
-              laborManHoursByJobType,
-              laborHourlyRateByJobType,
-              formData?.jobType,
-              findLaborRateForJobType
-            );
-            if (!(row.displayTotal > 0) && !(row.lineCost > 0)) {
-              return null;
-            }
-            return (
-              <tr key={`${variant}-labor-${idx}`}>
-                <td
-                  className={isPdf ? "text-xs" : "w-[400px] pr-2"}
-                  style={isPdf ? { textAlign: "left" } : undefined}
-                >
-                  {isPdf ? (
-                    getCustomerCopyDisplayDescription({
-                      reference: row.description,
-                      source: "Labor",
-                      jobType: labor?.jobType,
-                    })
-                  ) : (
-                    <p className="m-0">
-                      {getCustomerCopyDisplayDescription({
-                        reference: row.description,
-                        source: "Labor",
-                        jobType: labor?.jobType,
-                      })}
-                    </p>
-                  )}
-                </td>
-                <td
-                  className={isPdf ? "text-xs" : undefined}
-                  style={isPdf ? { textAlign: "center" } : undefined}
-                >
-                  {labor?.size || ""}
-                </td>
-                <td
-                  className={isPdf ? "text-xs" : undefined}
-                  style={isPdf ? { textAlign: "center" } : undefined}
-                >
-                  {!isPdf ? row.qtyText : ""}
-                </td>
-                {!isPdf && (
-                  <td>
-                    {row.lineCost > 0 ? formatMoney(row.lineCost) : ""}
-                  </td>
-                )}
-                {!isPdf && (
-                  <td>
-                    {row.markupVal !== null &&
-                    row.markupVal !== undefined &&
-                    row.markupVal !== ""
-                      ? Number(row.markupVal).toLocaleString("en-US", {
-                          minimumFractionDigits: 0,
-                          maximumFractionDigits: 2,
-                        }) + "%"
-                      : ""}
-                  </td>
-                )}
-                <td
-                  className={isPdf ? "text-xs" : undefined}
-                  style={isPdf ? { textAlign: "right" } : undefined}
-                >
-                  {row.displayPrice != null && row.displayPrice > 0
-                    ? formatMoney(row.displayPrice)
-                    : ""}
-                </td>
-                <td
-                  className={isPdf ? "text-xs" : undefined}
-                  style={isPdf ? { textAlign: "right" } : undefined}
-                >
-                  {row.displayTotal > 0 ? formatMoney(row.displayTotal) : ""}
-                </td>
-              </tr>
-            );
-          })}
       </>
     );
   };

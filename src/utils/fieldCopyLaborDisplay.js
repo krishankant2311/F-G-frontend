@@ -731,6 +731,20 @@ export function getCustomerCopyDisplayDescription(item) {
   return ref.toUpperCase();
 }
 
+/**
+ * Customer Copy Materials table — merge labor/crew rows when display description matches exactly.
+ */
+export function getCustomerCopyMaterialsTableMergeKey(item) {
+  if (!item) return null;
+  const isLaborLine =
+    item?.dataType === "Labor" ||
+    String(item?.source || "").toLowerCase() === "labor" ||
+    isFieldCopyLaborContext(item);
+  if (!isLaborLine) return null;
+  const desc = getCustomerCopyDisplayDescription(item);
+  return desc || null;
+}
+
 /** Customer Copy Materials table — LANDSCAPE/HARDSCAPE LABOR rows (hide qty & cost). */
 export function isLandscapeOrHardscapeLaborLabel(text) {
   const s = stripLaborReferenceParentheses(text).toUpperCase();
