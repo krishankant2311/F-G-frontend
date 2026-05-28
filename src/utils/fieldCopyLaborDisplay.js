@@ -714,6 +714,23 @@ export function stripLaborReferenceParentheses(text) {
     .trim();
 }
 
+/**
+ * Customer Copy table/PDF — labor descriptions without vendor text in (...).
+ * Materials (non-labor) keep full reference.
+ */
+export function getCustomerCopyDisplayDescription(item) {
+  const ref = String(item?.reference || item?.description || "").trim();
+  if (!ref) return "";
+  const isLaborLine =
+    item?.dataType === "Labor" ||
+    String(item?.source || "").toLowerCase() === "labor" ||
+    isFieldCopyLaborContext(item);
+  if (isLaborLine) {
+    return stripLaborReferenceParentheses(ref).toUpperCase();
+  }
+  return ref.toUpperCase();
+}
+
 /** Customer Copy Materials table — LANDSCAPE/HARDSCAPE LABOR rows (hide qty & cost). */
 export function isLandscapeOrHardscapeLaborLabel(text) {
   const s = stripLaborReferenceParentheses(text).toUpperCase();

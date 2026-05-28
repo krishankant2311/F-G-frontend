@@ -16,16 +16,16 @@ import {
   getOfficeFieldCopyCrewLaborRowFields,
   getOfficeFieldCopyLineCost,
   getOfficeFieldCopyRowCalculations,
+  getCustomerCopyDisplayDescription,
+  isFieldCopyLaborContext,
   lookupJobTypeCatalogRate,
   lookupLaborMapValue,
-  isLandscapeOrHardscapeLaborLabel,
   mergeCustomerCopyInvoiceSummaryRows,
   mergeLaborMapMissingKeys,
   normalizeJobTypeKey,
   resolveFieldCopyCrewUnitRate,
   resolveFieldCopyDisplayJobType,
   resolveOfficeFieldCopyGroupJobType,
-  stripLaborReferenceParentheses,
 } from "../../utils/fieldCopyLaborDisplay";
 
 export default function CustomerFieldCopyView() {
@@ -612,8 +612,6 @@ Approved by: __________________  Date: ____________________`,
         qtyDisplay = formatQtyCell(qtyFromItem);
       }
     }
-    const hideQtyCost = isLandscapeOrHardscapeLaborLabel(item?.reference);
-
     return {
       qty,
       qtyDisplay,
@@ -621,7 +619,6 @@ Approved by: __________________  Date: ____________________`,
       displayPrice,
       markupVal,
       totalVal: displayTotal,
-      hideQtyCost,
     };
   };
 
@@ -631,7 +628,12 @@ Approved by: __________________  Date: ____________________`,
       maximumFractionDigits: 2,
     });
 
-  /** Single source for on-screen table + PDF — keeps line items identical. */
+  /** PDF only — hide labor quantity column. */
+  const shouldHideCustomerCopyPdfLaborQuantity = (item) => {
+    if (String(item?.source || "").toLowerCase() === "labor") return true;
+    return isFieldCopyLaborContext(item);
+  };
+
   const renderCustomerCopyTableBody = (variant = "view") => {
     const isPdf = variant === "pdf";
     const items = categorizedFieldCopies?.[0]?.items ?? [];
@@ -640,17 +642,15 @@ Approved by: __________________  Date: ____________________`,
       <>
         {items.map((item, idx) => {
           const d = getPdfItemDisplayFields(item);
+          const hidePdfLaborQty =
+            isPdf && shouldHideCustomerCopyPdfLaborQuantity(item);
           return (
             <tr key={`${variant}-item-${idx}`}>
               <td
                 className={isPdf ? "text-xs w-[400px] pr-2" : "w-[400px] pr-2"}
                 style={isPdf ? { textAlign: "left" } : undefined}
               >
-                {isPdf ? (
-                  item?.reference?.toUpperCase()
-                ) : (
-                  item.reference?.toUpperCase()
-                )}
+                {getCustomerCopyDisplayDescription(item)}
               </td>
               <td
                 className={isPdf ? "text-xs" : undefined}
@@ -662,17 +662,14 @@ Approved by: __________________  Date: ____________________`,
                 className={isPdf ? "text-xs" : undefined}
                 style={isPdf ? { textAlign: "center" } : undefined}
               >
-                {!d.hideQtyCost &&
+                {!hidePdfLaborQty &&
                   (d.qtyDisplay || (d.qty > 0 ? formatQtyCell(d.qty) : ""))}
               </td>
-              <td
-                className={isPdf ? "text-xs" : undefined}
-                style={isPdf ? { textAlign: "right" } : undefined}
-              >
-                {!d.hideQtyCost && d.unitCostVal > 0
-                  ? formatMoney(d.unitCostVal)
-                  : ""}
-              </td>
+              {!isPdf && (
+                <td>
+                  {d.unitCostVal > 0 ? formatMoney(d.unitCostVal) : ""}
+                </td>
+              )}
               {!isPdf && (
                 <td>
                   {d.markupVal !== null &&
@@ -717,14 +714,27 @@ Approved by: __________________  Date: ____________________`,
             if (!(row.displayTotal > 0) && !(row.lineCost > 0)) {
               return null;
             }
-            const hideQtyCost = isLandscapeOrHardscapeLaborLabel(row.description);
             return (
               <tr key={`${variant}-labor-${idx}`}>
                 <td
                   className={isPdf ? "text-xs" : "w-[400px] pr-2"}
                   style={isPdf ? { textAlign: "left" } : undefined}
                 >
-                  {isPdf ? row.description : <p className="m-0">{row.description}</p>}
+                  {isPdf ? (
+                    getCustomerCopyDisplayDescription({
+                      reference: row.description,
+                      source: "Labor",
+                      jobType: labor?.jobType,
+                    })
+                  ) : (
+                    <p className="m-0">
+                      {getCustomerCopyDisplayDescription({
+                        reference: row.description,
+                        source: "Labor",
+                        jobType: labor?.jobType,
+                      })}
+                    </p>
+                  )}
                 </td>
                 <td
                   className={isPdf ? "text-xs" : undefined}
@@ -736,16 +746,13 @@ Approved by: __________________  Date: ____________________`,
                   className={isPdf ? "text-xs" : undefined}
                   style={isPdf ? { textAlign: "center" } : undefined}
                 >
-                  {!hideQtyCost ? row.qtyText : ""}
+                  {!isPdf ? row.qtyText : ""}
                 </td>
-                <td
-                  className={isPdf ? "text-xs" : undefined}
-                  style={isPdf ? { textAlign: "right" } : undefined}
-                >
-                  {!hideQtyCost && row.lineCost > 0
-                    ? formatMoney(row.lineCost)
-                    : ""}
-                </td>
+                {!isPdf && (
+                  <td>
+                    {row.lineCost > 0 ? formatMoney(row.lineCost) : ""}
+                  </td>
+                )}
                 {!isPdf && (
                   <td>
                     {row.markupVal !== null &&
@@ -784,7 +791,7 @@ Approved by: __________________  Date: ____________________`,
       if (item.dataType === "Material") {
         const sourceLaborLabel =
           item.source === "Labor" && item.reference
-            ? stripLaborReferenceParentheses(item.reference)
+            ? getCustomerCopyDisplayDescription(item)
             : null;
         return (
           <div
@@ -1759,12 +1766,11 @@ Approved by: __________________  Date: ____________________`,
                           style={{ tableLayout: "fixed", width: "100%" }}
                         >
                           <colgroup>
-                            <col style={{ width: "36%" }} />
-                            <col style={{ width: "9%" }} />
-                            <col style={{ width: "9%" }} />
-                            <col style={{ width: "13%" }} />
-                            <col style={{ width: "13%" }} />
-                            <col style={{ width: "20%" }} />
+                            <col style={{ width: "40%" }} />
+                            <col style={{ width: "12%" }} />
+                            <col style={{ width: "12%" }} />
+                            <col style={{ width: "18%" }} />
+                            <col style={{ width: "18%" }} />
                           </colgroup>
                           <thead>
                             <tr>
@@ -1776,9 +1782,6 @@ Approved by: __________________  Date: ____________________`,
                               </th>
                               <th className="text-xs" style={{ textAlign: "center" }}>
                                 <span className="relative -top-1.5">QUANTITY</span>
-                              </th>
-                              <th className="text-xs" style={{ textAlign: "right" }}>
-                                <span className="relative -top-1.5">COST</span>
                               </th>
                               <th className="text-xs" style={{ textAlign: "right" }}>
                                 <span className="relative -top-1.5">PRICE</span>
