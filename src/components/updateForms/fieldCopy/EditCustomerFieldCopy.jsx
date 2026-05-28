@@ -9,6 +9,9 @@ import parse from "html-react-parser";
 import {
   applyReferenceVendorToForm,
   ensureFgCostFromPrice,
+  normalizeFgEditableUnitValue,
+  recalcFgFieldCopyLineTotals,
+  syncFgCostPriceOnUserEdit,
   getMaterialNameInputValue,
   hydrateOtherFieldCopyFromApi,
   materialNameBaseForEdit,
@@ -600,6 +603,13 @@ export default function EditCustomerFieldCopy() {
 
     const updatedForm = { ...updatedForms[index], [name]: value };
 
+    if (updatedForm.source === "F&G" && name === "cost") {
+      updatedForm.cost = normalizeFgEditableUnitValue(value);
+    }
+    if (updatedForm.source === "F&G" && name === "price") {
+      updatedForm.price = normalizeFgEditableUnitValue(value);
+    }
+
     // Lump Sum only: reverse markup from cost + totalPrice
     if (
       (name === "cost" || name === "totalPrice") &&
@@ -668,17 +678,10 @@ export default function EditCustomerFieldCopy() {
           )
         );
       } else if (updatedForm.source === "F&G") {
-        Object.assign(updatedForm, ensureFgCostFromPrice(updatedForm));
-        const fgPrice = parseFloat(updatedForm.price) || 0;
-        const fgQty = parseFloat(updatedForm.quantity) || 0;
-        const fgCost = parseFloat(updatedForm.cost) || 0;
-        updatedForm.totalPrice =
-          fgPrice && fgQty ? fgPrice * fgQty : "";
-        updatedForm.totalCost = fgCost && fgQty ? fgCost * fgQty : "";
-        if (fgCost > 0 && fgPrice > 0) {
-          const autoMarkup = ((fgPrice - fgCost) / fgCost) * 100;
-          updatedForm.markup = Math.round(autoMarkup * 100) / 100;
-          updatedForm.markUp = updatedForm.markup;
+        if (name === "price") {
+          Object.assign(updatedForm, syncFgCostPriceOnUserEdit(updatedForm, "price"));
+        } else {
+          Object.assign(updatedForm, recalcFgFieldCopyLineTotals(updatedForm));
         }
       } else {
         updatedForm.totalPrice = price && quantity ? price * quantity : "";
@@ -688,16 +691,7 @@ export default function EditCustomerFieldCopy() {
 
     // Autofill markup when cost changes (F&G only) - cost/price se markup auto calculate
     if (name === "cost" && updatedForm.source === "F&G") {
-      const cost = parseFloat(updatedForm.cost) || 0;
-      const price = parseFloat(updatedForm.price) || 0;
-      const quantity = parseFloat(updatedForm.quantity) || 1;
-      if (cost > 0 && price > 0) {
-        const autoMarkup = ((price - cost) / cost) * 100;
-        updatedForm.markup = Math.round(autoMarkup * 100) / 100;
-        updatedForm.markUp = updatedForm.markup;
-        updatedForm.totalCost = cost * quantity;
-        updatedForm.totalPrice = price * quantity;
-      }
+      Object.assign(updatedForm, syncFgCostPriceOnUserEdit(updatedForm, "cost"));
     }
 
     if (name === "markup" || name === "markUp") {
@@ -1338,19 +1332,18 @@ export default function EditCustomerFieldCopy() {
                             </div>
                           </div>
                           <div className="form-group flex flex-col">
-                            <label htmlFor={`measure-${index}`}>Cost *</label>
+                            <label htmlFor={`cost-fg-edit-${index}`}>Cost *</label>
                             <input
-                              type="text"
-                              className="border-b border-[grey] outline-none"
-                              id={`measure-${index}`}
+                              type="number"
+                              className="border-b border-[grey] outline-none w-[180px]"
+                              id={`cost-fg-edit-${index}`}
                               name="cost"
                               onChange={(e) => handleInputChange(e, index)}
                               value={formData.cost}
-                              placeholder="Enter Cost "
-                              readOnly={
-                                formData.source === "Other" ? false : true
-                              }
-                            // required
+                              placeholder="Enter Cost"
+                              min={0}
+                              max={10000000}
+                              step="any"
                             />
                           </div>
                           <div className="form-group flex flex-col">

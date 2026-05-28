@@ -1547,6 +1547,11 @@ import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import { useTableContext } from "../../../context/TableContext";
 import { useNavigate, useParams } from "react-router-dom";
+import {
+  normalizeFgEditableUnitValue,
+  recalcFgFieldCopyLineTotals,
+  syncFgCostPriceOnUserEdit,
+} from "../../../utils/materialReference";
 
 export default function AddDraftCopyForm() {
   const [forms, setForms] = useState([
@@ -1666,6 +1671,13 @@ export default function AddDraftCopyForm() {
 
     const updatedForm = { ...updatedForms[index], [name]: value };
 
+    if (updatedForm.source === "F&G" && name === "cost") {
+      updatedForm.cost = normalizeFgEditableUnitValue(value);
+    }
+    if (updatedForm.source === "F&G" && name === "price") {
+      updatedForm.price = normalizeFgEditableUnitValue(value);
+    }
+
     // if(name === "vendorName"){
     //   if(containsNumberOrSpecialChar(e.target.value)){
     //     toast.error("Vendor name cannot contain numbers or special characters.");
@@ -1706,6 +1718,10 @@ export default function AddDraftCopyForm() {
       updatedForm.totalPrice = cost + (cost * markupPercent) / 100;
     }
 
+    if (name === "cost" && updatedForm.source === "F&G") {
+      Object.assign(updatedForm, syncFgCostPriceOnUserEdit(updatedForm, "cost"));
+    }
+
     // Calculate total price if both price and quantity are filled
     if (name === "price" || name === "quantity") {
       const price = parseFloat(updatedForm.price) || 0;
@@ -1724,6 +1740,12 @@ export default function AddDraftCopyForm() {
           updatedForm.totalPrice =
             updatedForm.totalCost +
             (updatedForm.markup * updatedForm.totalCost) / 100;
+        }
+      } else if (updatedForm.source === "F&G") {
+        if (name === "price") {
+          Object.assign(updatedForm, syncFgCostPriceOnUserEdit(updatedForm, "price"));
+        } else {
+          Object.assign(updatedForm, recalcFgFieldCopyLineTotals(updatedForm));
         }
       } else {
         updatedForm.totalPrice = price && quantity ? price * quantity : "";
@@ -1766,7 +1788,10 @@ export default function AddDraftCopyForm() {
       updatedForm.isTaxable = updatedForm.isTaxable === "true" || updatedForm.isTaxable === true ? true : false;
     }
     // when cost / markup are edited directly for lump sum & labor rows
-    if (name === "cost" || name === "markup" || name === "markUp") {
+    if (
+      (name === "cost" || name === "markup" || name === "markUp") &&
+      (updatedForm.source === "Lump Sum" || updatedForm.source === "Labor")
+    ) {
       const cost = parseFloat(updatedForm.totalCost || updatedForm.cost) || 0;
       const markupPercent =
         parseFloat(
@@ -2482,19 +2507,18 @@ export default function AddDraftCopyForm() {
                           </div>
                         </div>
                         <div className="form-group flex flex-col">
-                          <label htmlFor={`measure-${index}`}>Cost *</label>
+                          <label htmlFor={`cost-fg-${index}`}>Cost *</label>
                           <input
-                            type="text"
-                            className="border-b border-[grey] outline-none"
-                            id={`measure-${index}`}
+                            type="number"
+                            className="border-b border-[grey] outline-none w-[180px]"
+                            id={`cost-fg-${index}`}
                             name="cost"
                             onChange={(e) => handleInputChange(e, index)}
                             value={formData.cost}
-                            placeholder="Enter Cost "
-                            readOnly={
-                              formData.source === "Other" ? false : true
-                            }
-                          // required
+                            placeholder="Enter Cost"
+                            min={0}
+                            max={10000000}
+                            step="any"
                           />
                         </div>
                         <div className="form-group flex flex-col">

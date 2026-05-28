@@ -1662,6 +1662,11 @@ import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import { useTableContext } from "../../../context/TableContext";
 import { useNavigate, useParams } from "react-router-dom";
+import {
+  normalizeFgEditableUnitValue,
+  recalcFgFieldCopyLineTotals,
+  syncFgCostPriceOnUserEdit,
+} from "../../../utils/materialReference";
 
 export default function EditDraftCopyForm() {
   const [forms, setForms] = useState([
@@ -1785,6 +1790,13 @@ const handleInputChange = (e, index) => {
     [name]: value,
   };
 
+  if (updatedForm.source === "F&G" && name === "cost") {
+    updatedForm.cost = normalizeFgEditableUnitValue(value);
+  }
+  if (updatedForm.source === "F&G" && name === "price") {
+    updatedForm.price = normalizeFgEditableUnitValue(value);
+  }
+
   // ✅ NORMALIZE markup / markUp (MAIN FIX)
   if (name === "markUp" || name === "markup") {
     updatedForm.markup = parseFloat(value) || 0;
@@ -1793,6 +1805,10 @@ const handleInputChange = (e, index) => {
   // if old data came with markUp
   if (updatedForm.markup === undefined && updatedForm.markUp !== undefined) {
     updatedForm.markup = parseFloat(updatedForm.markUp) || 0;
+  }
+
+  if (name === "cost" && updatedForm.source === "F&G") {
+    Object.assign(updatedForm, syncFgCostPriceOnUserEdit(updatedForm, "cost"));
   }
 
   // ---------- PRICE / QUANTITY ----------
@@ -1805,6 +1821,12 @@ const handleInputChange = (e, index) => {
       updatedForm.totalPrice =
         updatedForm.totalCost +
         (updatedForm.totalCost * (updatedForm.markup || 0)) / 100;
+    } else if (updatedForm.source === "F&G") {
+      if (name === "price") {
+        Object.assign(updatedForm, syncFgCostPriceOnUserEdit(updatedForm, "price"));
+      } else {
+        Object.assign(updatedForm, recalcFgFieldCopyLineTotals(updatedForm));
+      }
     } else {
       updatedForm.totalCost = price && quantity ? price * quantity : 0;
       updatedForm.totalPrice = updatedForm.totalCost;
@@ -2815,19 +2837,18 @@ const handleInputChange = (e, index) => {
                           </div>
                         </div>
                         <div className="form-group flex flex-col">
-                          <label htmlFor={`measure-${index}`}>Cost</label>
+                          <label htmlFor={`cost-fg-${index}`}>Cost</label>
                           <input
-                            type="text"
-                            className="border-b border-[grey] outline-none"
-                            id={`measure-${index}`}
+                            type="number"
+                            className="border-b border-[grey] outline-none w-[180px]"
+                            id={`cost-fg-${index}`}
                             name="cost"
                             onChange={(e) => handleInputChange(e, index)}
                             value={formData.cost}
                             placeholder="Enter cost"
-                            readOnly={
-                              formData.source === "Other" ? false : true
-                            }
-                          // required
+                            min={0}
+                            max={10000000}
+                            step="any"
                           />
                         </div>
                         <div className="form-group flex flex-col">

@@ -103,6 +103,77 @@ export function ensureFgCostFromPrice(form) {
   return { ...f, cost: unitCost };
 }
 
+function roundFgUnitAmount(n) {
+  return Math.round(n * 10000) / 10000;
+}
+
+/** F&G cost/price input — empty while typing; strip leading zeros (025 → 25). */
+export function normalizeFgEditableUnitValue(raw) {
+  if (raw === "" || raw === null || raw === undefined) return "";
+  const s = String(raw).trim();
+  if (s === "" || s === ".") return "";
+  const n = parseFloat(s);
+  if (Number.isNaN(n) || n < 0) return "";
+  return roundFgUnitAmount(n);
+}
+
+/** F&G — line totals + markup from unit cost/price × quantity. */
+export function recalcFgFieldCopyLineTotals(form) {
+  if (!form || form.source !== "F&G") return { ...form };
+  const f = { ...form };
+  const unitCost = parseFloat(f.cost) || 0;
+  const unitPrice = parseFloat(f.price) || 0;
+  const qty = parseFloat(f.quantity) || 0;
+  if (qty > 0) {
+    f.totalCost = unitCost > 0 ? Math.round(unitCost * qty * 100) / 100 : "";
+    f.totalPrice = unitPrice > 0 ? Math.round(unitPrice * qty * 100) / 100 : "";
+  }
+  if (unitCost > 0 && unitPrice > 0) {
+    f.markup = Math.round(((unitPrice - unitCost) / unitCost) * 10000) / 100;
+    f.markUp = f.markup;
+  }
+  return f;
+}
+
+/**
+ * F&G only — user edits cost or price: price = 2×cost, cost = ½×price.
+ * Do not use on material select / API load (keep backend values).
+ */
+export function syncFgCostPriceOnUserEdit(form, changedField) {
+  if (!form || form.source !== "F&G") return { ...form };
+  const f = { ...form };
+
+  if (changedField === "cost") {
+    if (f.cost === "" || f.cost === null || f.cost === undefined) {
+      return recalcFgFieldCopyLineTotals(f);
+    }
+    const c = parseFloat(f.cost);
+    if (Number.isNaN(c)) return f;
+    if (c > 0) {
+      f.cost = roundFgUnitAmount(c);
+      f.price = roundFgUnitAmount(c * 2);
+    } else {
+      f.cost = "";
+      f.price = "";
+    }
+  } else if (changedField === "price") {
+    if (f.price === "" || f.price === null || f.price === undefined) {
+      return recalcFgFieldCopyLineTotals(f);
+    }
+    const p = parseFloat(f.price);
+    if (Number.isNaN(p)) return f;
+    if (p > 0) {
+      f.price = roundFgUnitAmount(p);
+      f.cost = roundFgUnitAmount(p / 2);
+    } else {
+      f.cost = "";
+      f.price = "";
+    }
+  }
+
+  return recalcFgFieldCopyLineTotals(f);
+}
+
 /** Load saved Other row: DB `cost` = unit cost, `price` = unit sell. */
 export function hydrateOtherFieldCopyFromApi(form) {
   if (!form || form.source !== "Other") return form;

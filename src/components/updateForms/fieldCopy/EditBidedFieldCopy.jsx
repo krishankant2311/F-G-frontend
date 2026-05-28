@@ -713,6 +713,10 @@ import { useTableContext } from "../../../context/TableContext";
 import parse from "html-react-parser";
 import {
   applyReferenceVendorToForm,
+  ensureFgCostFromPrice,
+  normalizeFgEditableUnitValue,
+  recalcFgFieldCopyLineTotals,
+  syncFgCostPriceOnUserEdit,
   getMaterialNameInputValue,
   materialNameBaseForEdit,
   toPersistedCopy,
@@ -743,6 +747,7 @@ export default function EditBidedFieldCopy() {
       measure: "",
       quantity: "",
       price: "",
+      cost: 0,
       totalCost: 0,
       totalPrice: 0,
       invoice: "",
@@ -1225,6 +1230,13 @@ export default function EditBidedFieldCopy() {
 
     const updatedForm = { ...updatedForms[index], [name]: value };
 
+    if (updatedForm.source === "F&G" && name === "cost") {
+      updatedForm.cost = normalizeFgEditableUnitValue(value);
+    }
+    if (updatedForm.source === "F&G" && name === "price") {
+      updatedForm.price = normalizeFgEditableUnitValue(value);
+    }
+
     // if (name === "vendorName") {
     //   if (containsNumberOrSpecialChar(e.target.value)) {
     //     toast.error(
@@ -1269,10 +1281,20 @@ export default function EditBidedFieldCopy() {
             updatedForm.totalCost +
             (updatedForm.markup * updatedForm.totalCost) / 100;
         }
+      } else if (updatedForm.source === "F&G") {
+        if (name === "price") {
+          Object.assign(updatedForm, syncFgCostPriceOnUserEdit(updatedForm, "price"));
+        } else {
+          Object.assign(updatedForm, recalcFgFieldCopyLineTotals(updatedForm));
+        }
       } else {
         updatedForm.totalPrice = price && quantity ? price * quantity : "";
         updatedForm.totalCost = price && quantity ? price * quantity : "";
       }
+    }
+
+    if (name === "cost" && updatedForm.source === "F&G") {
+      Object.assign(updatedForm, syncFgCostPriceOnUserEdit(updatedForm, "cost"));
     }
 
     if (name === "markup") {
@@ -1322,17 +1344,32 @@ export default function EditBidedFieldCopy() {
       (material) => material.name === materialName
     );
     const updatedForms = [...forms];
-    const row = {
+    let row = {
       ...updatedForms[index],
       referenceBase: material.name,
       reference: material.name,
       measure: material.measure,
       price: material.price,
+      cost: material.cost,
       isTaxable: material.isTaxable,
       totalPrice:
         Number.parseFloat(material.price) *
         Number.parseFloat(forms[index].quantity),
     };
+    if (updatedForms[index].source === "F&G") {
+      row = ensureFgCostFromPrice(row);
+      const qty = Number.parseFloat(forms[index].quantity) || 0;
+      const unitPrice = Number.parseFloat(row.price) || 0;
+      const unitCost = Number.parseFloat(row.cost) || 0;
+      if (qty > 0) {
+        row.totalPrice = unitPrice > 0 ? unitPrice * qty : row.totalPrice;
+        row.totalCost = unitCost > 0 ? unitCost * qty : "";
+      }
+      if (unitCost > 0 && unitPrice > 0) {
+        row.markup = Math.round(((unitPrice - unitCost) / unitCost) * 10000) / 100;
+        row.markUp = row.markup;
+      }
+    }
     updatedForms[index] = applyReferenceVendorToForm(row);
     setForms(updatedForms);
   };
@@ -1438,6 +1475,7 @@ export default function EditBidedFieldCopy() {
         measure: "",
         quantity: "",
         price: "",
+        cost: 0,
         PO: "",
         invoice: "",
         totalPrice: "",
@@ -1901,6 +1939,21 @@ export default function EditBidedFieldCopy() {
                                 </div>
                               )}
                             </div>
+                          </div>
+                          <div className="form-group flex flex-col">
+                            <label htmlFor={`cost-fg-bid-${index}`}>Cost *</label>
+                            <input
+                              type="number"
+                              className="border-b border-[grey] outline-none w-[180px]"
+                              id={`cost-fg-bid-${index}`}
+                              name="cost"
+                              onChange={(e) => handleInputChange(e, index)}
+                              value={formData.cost}
+                              placeholder="Enter Cost"
+                              min={0}
+                              max={10000000}
+                              step="any"
+                            />
                           </div>
                         </>
                       )}

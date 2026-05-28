@@ -12,6 +12,9 @@ import JoditEditor from "jodit-react";
 import {
   applyReferenceVendorToForm,
   ensureFgCostFromPrice,
+  normalizeFgEditableUnitValue,
+  recalcFgFieldCopyLineTotals,
+  syncFgCostPriceOnUserEdit,
   getMaterialNameInputValue,
   otherFieldCopyCostDisplayValue,
   recalcOtherFieldCopyLine,
@@ -252,9 +255,15 @@ export default function AddFieldCopyForm() {
       if (updatedForm.source === "Other") {
         updatedForm.cost =
           value === "" ? "" : parseFloat(value) || 0;
+      } else if (name === "cost" && updatedForm.source === "F&G") {
+        updatedForm.cost = normalizeFgEditableUnitValue(value);
       } else if (name === "cost") {
         updatedForm.cost = parseFloat(value) || 0;
       }
+    }
+
+    if (name === "price" && updatedForm.source === "F&G") {
+      updatedForm.price = normalizeFgEditableUnitValue(value);
     }
 
     // if(name === "vendorName"){
@@ -296,6 +305,10 @@ export default function AddFieldCopyForm() {
       );
     }
 
+    if (name === "cost" && updatedForm.source === "F&G") {
+      Object.assign(updatedForm, syncFgCostPriceOnUserEdit(updatedForm, "cost"));
+    }
+
     // Calculate total price if both price and quantity are filled
     if (name === "price" || name === "quantity") {
       const price = parseFloat(updatedForm.price) || 0;
@@ -308,10 +321,13 @@ export default function AddFieldCopyForm() {
             name === "quantity" ? "preserve" : "price"
           )
         );
-      } else {
-        if (updatedForm.source === "F&G") {
-          Object.assign(updatedForm, ensureFgCostFromPrice(updatedForm));
+      } else if (updatedForm.source === "F&G") {
+        if (name === "price") {
+          Object.assign(updatedForm, syncFgCostPriceOnUserEdit(updatedForm, "price"));
+        } else {
+          Object.assign(updatedForm, recalcFgFieldCopyLineTotals(updatedForm));
         }
+      } else {
         updatedForm.totalPrice = price && quantity ? price * quantity : "";
         updatedForm.totalCost = price && quantity ? price * quantity : "";
       }
@@ -405,6 +421,7 @@ export default function AddFieldCopyForm() {
         ? 100
         : numMarkup;
 
+    const qty = Number.parseFloat(forms[index].quantity) || 0;
     let row = {
       ...updatedForms[index],
       referenceBase: material.name,
@@ -416,11 +433,12 @@ export default function AddFieldCopyForm() {
       markup: resolvedMarkup,
       isTaxable: material.isTaxable,
       totalPrice:
-        Number.parseFloat(material.price) *
-        Number.parseFloat(forms[index].quantity),
+        Number.parseFloat(material.price) * qty,
     };
     if (updatedForms[index].source === "F&G") {
       row = ensureFgCostFromPrice(row);
+      const unitCost = Number.parseFloat(row.cost) || 0;
+      row.totalCost = unitCost > 0 && qty > 0 ? unitCost * qty : "";
     }
     updatedForms[index] = applyReferenceVendorToForm(row);
     setForms(updatedForms);
@@ -1221,14 +1239,17 @@ export default function AddFieldCopyForm() {
                         <div className="form-group flex flex-col">
                           <label htmlFor={`cost-fg-${index}`}>Cost *</label>
                           <input
-                            type="text"
+                            type="number"
                             className="border-b border-[grey] outline-none w-[180px]"
                             id={`cost-fg-${index}`}
                             name="cost"
                             onChange={(e) => handleInputChange(e, index)}
                             value={formData.cost}
-                            placeholder="Enter Cost "
-                            readOnly
+                            placeholder="Enter Cost"
+                            min={0}
+                            max={10000000}
+                            step="any"
+                            required
                           />
                         </div>
                         <div className="form-group flex flex-col">

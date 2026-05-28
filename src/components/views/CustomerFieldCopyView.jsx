@@ -18,11 +18,14 @@ import {
   getOfficeFieldCopyRowCalculations,
   lookupJobTypeCatalogRate,
   lookupLaborMapValue,
+  isLandscapeOrHardscapeLaborLabel,
+  mergeCustomerCopyInvoiceSummaryRows,
   mergeLaborMapMissingKeys,
   normalizeJobTypeKey,
   resolveFieldCopyCrewUnitRate,
   resolveFieldCopyDisplayJobType,
   resolveOfficeFieldCopyGroupJobType,
+  stripLaborReferenceParentheses,
 } from "../../utils/fieldCopyLaborDisplay";
 
 export default function CustomerFieldCopyView() {
@@ -609,6 +612,8 @@ Approved by: __________________  Date: ____________________`,
         qtyDisplay = formatQtyCell(qtyFromItem);
       }
     }
+    const hideQtyCost = isLandscapeOrHardscapeLaborLabel(item?.reference);
+
     return {
       qty,
       qtyDisplay,
@@ -616,6 +621,7 @@ Approved by: __________________  Date: ____________________`,
       displayPrice,
       markupVal,
       totalVal: displayTotal,
+      hideQtyCost,
     };
   };
 
@@ -656,13 +662,16 @@ Approved by: __________________  Date: ____________________`,
                 className={isPdf ? "text-xs" : undefined}
                 style={isPdf ? { textAlign: "center" } : undefined}
               >
-                {d.qtyDisplay || (d.qty > 0 ? formatQtyCell(d.qty) : "")}
+                {!d.hideQtyCost &&
+                  (d.qtyDisplay || (d.qty > 0 ? formatQtyCell(d.qty) : ""))}
               </td>
               <td
                 className={isPdf ? "text-xs" : undefined}
                 style={isPdf ? { textAlign: "right" } : undefined}
               >
-                {d.unitCostVal > 0 ? formatMoney(d.unitCostVal) : ""}
+                {!d.hideQtyCost && d.unitCostVal > 0
+                  ? formatMoney(d.unitCostVal)
+                  : ""}
               </td>
               {!isPdf && (
                 <td>
@@ -708,6 +717,7 @@ Approved by: __________________  Date: ____________________`,
             if (!(row.displayTotal > 0) && !(row.lineCost > 0)) {
               return null;
             }
+            const hideQtyCost = isLandscapeOrHardscapeLaborLabel(row.description);
             return (
               <tr key={`${variant}-labor-${idx}`}>
                 <td
@@ -726,13 +736,15 @@ Approved by: __________________  Date: ____________________`,
                   className={isPdf ? "text-xs" : undefined}
                   style={isPdf ? { textAlign: "center" } : undefined}
                 >
-                  {row.qtyText}
+                  {!hideQtyCost ? row.qtyText : ""}
                 </td>
                 <td
                   className={isPdf ? "text-xs" : undefined}
                   style={isPdf ? { textAlign: "right" } : undefined}
                 >
-                  {row.lineCost > 0 ? formatMoney(row.lineCost) : ""}
+                  {!hideQtyCost && row.lineCost > 0
+                    ? formatMoney(row.lineCost)
+                    : ""}
                 </td>
                 {!isPdf && (
                   <td>
@@ -772,7 +784,7 @@ Approved by: __________________  Date: ____________________`,
       if (item.dataType === "Material") {
         const sourceLaborLabel =
           item.source === "Labor" && item.reference
-            ? item.reference
+            ? stripLaborReferenceParentheses(item.reference)
             : null;
         return (
           <div
@@ -994,10 +1006,12 @@ Approved by: __________________  Date: ____________________`,
         };
       });
 
-    return sortByJobType([
-      ...categorizeMaterial(materialSeeds),
-      ...categorizeLabor(laborSeeds),
-    ]);
+    return sortByJobType(
+      mergeCustomerCopyInvoiceSummaryRows([
+        ...categorizeMaterial(materialSeeds),
+        ...categorizeLabor(laborSeeds),
+      ])
+    );
   }, [
     categorizedFieldCopies,
     fieldCopies,

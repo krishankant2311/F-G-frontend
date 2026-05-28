@@ -705,3 +705,130 @@ export function formatFieldCopyAmount(value) {
     maximumFractionDigits: 2,
   });
 }
+
+/** Customer Copy invoice summary — strip "(DEANS)" / vendor suffixes from labor labels. */
+export function stripLaborReferenceParentheses(text) {
+  return String(text ?? "")
+    .replace(/\s*\([^)]*\)/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Customer Copy Materials table — LANDSCAPE/HARDSCAPE LABOR rows (hide qty & cost). */
+export function isLandscapeOrHardscapeLaborLabel(text) {
+  const s = stripLaborReferenceParentheses(text).toUpperCase();
+  if (!s.includes("LABOR")) return false;
+  return s.includes("LANDSCAPE") || s.includes("HARDSCAPE");
+}
+
+function resolveCustomerCopyInvoiceLaborJobType(item) {
+  const jt = resolveFieldCopyDisplayJobType({ jobType: item?.jobType });
+  if (jt) return jt;
+  const ref = stripLaborReferenceParentheses(item?.reference || "").toUpperCase();
+  const m = ref.match(/^([A-Z][A-Z\s]*?)\s+LABOR\b/);
+  return m ? String(m[1]).trim().toUpperCase() : "";
+}
+
+/** Standard invoice label for a job type, e.g. "LANDSCAPE LABOR". */
+export function getStandardJobTypeLaborLabel(jobType) {
+  const jt = resolveCustomerCopyInvoiceLaborJobType({ jobType });
+  return jt ? `${jt} LABOR` : "";
+}
+
+/** Description only — strip "(...)" suffixes; brackets are not compared. */
+export function getCustomerCopyInvoiceDescriptionBase(item) {
+  if (!item) return "";
+  if (item.dataType === "Labor") {
+    return getStandardJobTypeLaborLabel(item.jobType);
+  }
+  const ref = String(item.reference || item.description || "").trim();
+  return stripLaborReferenceParentheses(ref).toUpperCase();
+}
+
+/**
+ * Customer Copy invoice summary — compare description base only (no bracket text).
+ * Matches crew job-type line when base equals e.g. "LANDSCAPE LABOR".
+ */
+export function customerCopyInvoiceDescriptionMatchesLaborType(item) {
+  if (!item) return false;
+  const standard = getStandardJobTypeLaborLabel(item.jobType);
+  if (!standard) return false;
+  if (item.dataType === "Labor") return true;
+  if (item.dataType === "Material" && String(item.source || "") === "Labor") {
+    const base = getCustomerCopyInvoiceDescriptionBase(item);
+    return !!base && base === standard;
+  }
+  return false;
+}
+
+/**
+ * Customer Copy invoice summary — merge same description base (ignore parentheses).
+ * Different base descriptions stay on separate lines.
+ */
+export function getCustomerCopyInvoiceLaborMergeKey(item) {
+  if (!item) return null;
+  const isContractor =
+    item.dataType === "Material" && String(item.source || "") === "Labor";
+  const isCrew = item.dataType === "Labor";
+  if (!isContractor && !isCrew) return null;
+
+  const jtKey = normalizeJobTypeKey(resolveCustomerCopyInvoiceLaborJobType(item));
+  if (!jtKey) return null;
+
+  const taxable = !!(item.isLaborTaxable ?? item.isTaxable);
+  const standard = getStandardJobTypeLaborLabel(item.jobType);
+  const base = getCustomerCopyInvoiceDescriptionBase(item);
+
+  if (!base) return null;
+
+  if (item.dataType === "Labor" || base === standard) {
+    return `${jtKey}|${taxable}|std`;
+  }
+
+  return `${jtKey}|${taxable}|ref:${base.replace(/\s+/g, " ")}`;
+}
+
+export function mergeCustomerCopyInvoiceSummaryRows(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return rows;
+
+  const mergedByKey = new Map();
+  const result = [];
+
+  for (const row of rows) {
+    const key = getCustomerCopyInvoiceLaborMergeKey(row);
+    if (!key) {
+      result.push(row);
+      continue;
+    }
+
+    const price = Number(row.totalPrice) || 0;
+    const existing = mergedByKey.get(key);
+
+    if (existing) {
+      existing.totalPrice += price;
+      if (row.totalCost != null) {
+        existing.totalCost =
+          (Number(existing.totalCost) || 0) + (Number(row.totalCost) || 0);
+      }
+      continue;
+    }
+
+    const jobType = resolveCustomerCopyInvoiceLaborJobType(row);
+    const matchesStd = customerCopyInvoiceDescriptionMatchesLaborType(row);
+    const normalized = matchesStd
+      ? {
+          ...row,
+          dataType: "Labor",
+          jobType: jobType || row.jobType,
+          reference: "",
+        }
+      : {
+          ...row,
+          jobType: jobType || row.jobType,
+        };
+    mergedByKey.set(key, normalized);
+    result.push(normalized);
+  }
+
+  return result;
+}
