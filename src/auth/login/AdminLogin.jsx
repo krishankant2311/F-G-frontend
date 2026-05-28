@@ -44,10 +44,6 @@ export default function AdminLogin() {
       toast.error(error.data?.message);
     }
     setDisableBtn(false);
-    // setFormData({
-    //     email: "",
-    //     password: "",
-    // })
   };
 
   const togglePasswordVisibility = () => {

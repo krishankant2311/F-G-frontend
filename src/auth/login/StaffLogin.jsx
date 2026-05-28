@@ -29,7 +29,6 @@ export default function StaffLogin() {
             formdata.append("password",  formData.password);
             setDisableBtn(true);
             const response =  await axios.post(`${process.env.REACT_APP_API_BASE_URL}/staff/login`,formdata);
-            // console.log("datacheck",${process.env.REACT_APP_API_BASE_URL});
             console.log("loginresponse",response);
             if(response.data.statusCode === 200){
                 localStorage.setItem("f&gstafftoken", response.data.result.token);
@@ -39,14 +38,9 @@ export default function StaffLogin() {
             }
         } catch (error) {
             console.error("dqdw",error);
-            // console.log("datacheck",${process.env.REACT_APP_API_BASE_URL});
             toast.error(error.response.data?.message);
         }
         setDisableBtn(false);
-        // setFormData({
-        //     email: "",
-        //     password: "",
-        // })
     }
 
     const togglePasswordVisibility = () => {
