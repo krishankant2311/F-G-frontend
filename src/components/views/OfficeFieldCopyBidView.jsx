@@ -128,7 +128,10 @@ export default function OfficeFieldCopyBidView() {
   ]);
 
   const workSummarySalesTax = useMemo(
-    () => (Number(taxPercent) || 0) * (Number(workSummarySellTaxableDisplay) || 0) / 100,
+    () =>
+      (Number(taxPercent) || 0) *
+      (Number(workSummarySellTaxableDisplay) || 0) /
+      100,
     [taxPercent, workSummarySellTaxableDisplay]
   );
 
@@ -1920,9 +1923,9 @@ export default function OfficeFieldCopyBidView() {
                                     ? "CT"
                                     : formData?.customerType?.toUpperCase()}
                               </b>
-                              {laborHours > 0 && (
+                              {getWorkSummaryLaborHours(item) > 0 && (
                                 <span className="ml-2">
-                                  ({laborHours.toLocaleString("en-US", {
+                                  ({getWorkSummaryLaborHours(item).toLocaleString("en-US", {
                                     minimumFractionDigits: 0,
                                     maximumFractionDigits: 2,
                                   })} HRS)
@@ -1969,6 +1972,7 @@ export default function OfficeFieldCopyBidView() {
                           fromFc > 0
                             ? fromFc
                             : Number(item.totalCost) || Number(item.cost) || Number(item.totalPrice) || 0;
+                        const laborHours = getWorkSummaryLaborHours(item);
                         return (
                           <div
                             key={`pdf-ws-l-${item.jobType}-${item.isLaborTaxable}`}
@@ -1992,9 +1996,9 @@ export default function OfficeFieldCopyBidView() {
                                     ? "CT"
                                     : formData?.customerType?.toUpperCase()}
                               </b>
-                              {getWorkSummaryLaborHours(item) > 0 && (
+                              {laborHours > 0 && (
                                 <span className="ml-2">
-                                  ({getWorkSummaryLaborHours(item).toLocaleString("en-US", {
+                                  ({laborHours.toLocaleString("en-US", {
                                     minimumFractionDigits: 0,
                                     maximumFractionDigits: 2,
                                   })} HRS)
@@ -3021,9 +3025,9 @@ export default function OfficeFieldCopyBidView() {
                                   ? "CT"
                                   : formData?.customerType?.toUpperCase()}
                             </b>
-                            {laborHours > 0 && (
+                            {getWorkSummaryLaborHours(item) > 0 && (
                               <span className="ml-2">
-                                ({laborHours.toLocaleString("en-US", {
+                                ({getWorkSummaryLaborHours(item).toLocaleString("en-US", {
                                   minimumFractionDigits: 0,
                                   maximumFractionDigits: 2,
                                 })} HRS)
@@ -3069,6 +3073,7 @@ export default function OfficeFieldCopyBidView() {
                         fromFc > 0
                           ? fromFc
                           : Number(item.totalCost) || Number(item.cost) || Number(item.totalPrice) || 0;
+                      const laborHours = getWorkSummaryLaborHours(item);
                       return (
                         <div
                           key={`ws-l-${item.jobType}-${item.isLaborTaxable}`}
@@ -3092,9 +3097,9 @@ export default function OfficeFieldCopyBidView() {
                                   ? "CT"
                                   : formData?.customerType?.toUpperCase()}
                             </b>
-                            {getWorkSummaryLaborHours(item) > 0 && (
+                            {laborHours > 0 && (
                               <span className="ml-2">
-                                ({getWorkSummaryLaborHours(item).toLocaleString("en-US", {
+                                ({laborHours.toLocaleString("en-US", {
                                   minimumFractionDigits: 0,
                                   maximumFractionDigits: 2,
                                 })} HRS)

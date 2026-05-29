@@ -23,6 +23,11 @@ import {
   shouldHideContractorLaborWorkSummaryRow,
   shouldSkipAggregatedLaborPdfRow,
 } from "../../utils/fieldCopyLaborDisplay";
+import {
+  buildOfficeWorkSummaryDisplayRows,
+  getOfficeWorkSummaryDisplayLabel,
+  getOfficeWorkSummaryLaborMergeKey,
+} from "../../utils/officeWorkSummaryDisplay";
 
 export default function OfficeFieldCopyView() {
   const [formData, setFormData] = useState({
@@ -332,7 +337,11 @@ export default function OfficeFieldCopyView() {
         ? "CT"
         : formData?.customerType?.toUpperCase() || "";
 
-  const renderOfficeCrewLaborWorkSummary = (gridClass, keyPrefix = "ws-crew") =>
+  const renderOfficeCrewLaborWorkSummary = (
+    gridClass,
+    keyPrefix = "ws-crew",
+    skipMergedCrewKeys = null
+  ) =>
     getOfficeCrewLaborSources()
       .filter((labor) => {
         if (
@@ -346,6 +355,27 @@ export default function OfficeFieldCopyView() {
           laborManHoursByJobType
         );
         return hours > 0 || Number(labor?.totalPrice) > 0;
+      })
+      .filter((labor) => {
+        if (!skipMergedCrewKeys?.size) return true;
+        const crewRow = getOfficeFieldCopyCrewLaborRowFields(
+          labor,
+          laborManHoursByJobType,
+          laborHourlyRateByJobType,
+          formData?.jobType
+        );
+        const mergeKey = getOfficeWorkSummaryLaborMergeKey(
+          {
+            dataType: "Labor",
+            jobType: labor?.jobType,
+            reference: crewRow.description,
+            isLaborTaxable: labor?.isLaborTaxable,
+            isTaxable: labor?.isLaborTaxable,
+          },
+          fieldCopies
+        );
+        if (!mergeKey) return true;
+        return !skipMergedCrewKeys.has(mergeKey);
       })
       .map((labor, idx) => {
         const row = getOfficeFieldCopyCrewLaborRowFields(
@@ -554,6 +584,18 @@ export default function OfficeFieldCopyView() {
     fieldLaborData,
   ]);
 
+  const { rows: officeWorkSummaryDisplayRows, mergedCrewKeys: officeWorkSummaryMergedCrewKeys } =
+    useMemo(
+      () =>
+        buildOfficeWorkSummaryDisplayRows(
+          workSummaryRows,
+          visibleCrewLaborRows,
+          materialLaborData,
+          fieldCopies
+        ),
+      [workSummaryRows, visibleCrewLaborRows, materialLaborData, fieldCopies]
+    );
+
   const isWorkSummaryLineTaxableRt = (item, labor) => {
     const customerType = formData?.customerType;
     if (customerType === "Exempt") return false;
@@ -660,6 +702,9 @@ export default function OfficeFieldCopyView() {
   };
 
   const getBidStyleWorkSummaryCost = (item) => {
+    if (item?._officeWsMerged) {
+      return Number(item?.totalCost) || 0;
+    }
     const fromFc = costFromFieldCopiesForRow(item);
     if (item?.dataType === "Material") {
       return fromFc > 0 ? fromFc : Number(item?.totalCost) || 0;
@@ -670,6 +715,9 @@ export default function OfficeFieldCopyView() {
   };
 
   const getBidStyleWorkSummarySell = (item) => {
+    if (item?._officeWsMerged) {
+      return Number(item?.totalPrice) || 0;
+    }
     const fromFc = sellFromFieldCopiesForRow(item);
     return fromFc > 0 ? fromFc : Number(item?.totalPrice) || 0;
   };
@@ -2103,7 +2151,7 @@ export default function OfficeFieldCopyView() {
                       <span className="min-w-0" aria-hidden />
                       <span className="text-end whitespace-nowrap">$</span>
                     </div>
-                    {workSummaryRows.map((item) => {
+                    {officeWorkSummaryDisplayRows.map((item) => {
                       if (item.dataType === "Material") {
                         const laborLike = isLaborLikeEntry(item);
                         const rowCost = getBidStyleWorkSummaryCost(item);
@@ -2115,15 +2163,10 @@ export default function OfficeFieldCopyView() {
                             <span className="col-span-3 min-w-0">
                               <b className="w-[200px] inline-block">
                                 {item.source === "Labor"
-                                  ? String(
+                                  ? getOfficeWorkSummaryDisplayLabel(item, fieldCopies) ||
+                                    String(
                                       item.reference ||
                                         item.description ||
-                                        getLaborPdfDescription({
-                                          labor: item,
-                                          groupItems:
-                                            categorizedFieldCopies?.[0]?.items,
-                                          fieldCopies,
-                                        }) ||
                                         ""
                                     ).toUpperCase()
                                   : `${item.jobType?.toUpperCase() || ""} ${
@@ -2196,12 +2239,13 @@ export default function OfficeFieldCopyView() {
                             >
                               <span className="col-span-3 min-w-0">
                                 <b className="w-[200px] inline-block">
-                                  {getLaborPdfDescription({
-                                    labor: item,
-                                    groupItems:
-                                      categorizedFieldCopies?.[0]?.items,
-                                    fieldCopies,
-                                  })?.toUpperCase()}
+                                  {getOfficeWorkSummaryDisplayLabel(item, fieldCopies) ||
+                                    getLaborPdfDescription({
+                                      labor: item,
+                                      groupItems:
+                                        categorizedFieldCopies?.[0]?.items,
+                                      fieldCopies,
+                                    })?.toUpperCase()}
                                 </b>
                                 <b>
                                   {formData?.customerType === "Normal"
@@ -2230,7 +2274,10 @@ export default function OfficeFieldCopyView() {
                               <span className="min-w-0" aria-hidden />
                               <span className="text-end tabular-nums whitespace-nowrap">
                                 <b>$</b>{" "}
-                                {item.totalPrice?.toLocaleString("en-US", {
+                                {(Number(item.totalPrice) > 0
+                                  ? Number(item.totalPrice)
+                                  : getBidStyleWorkSummarySell(item)
+                                ).toLocaleString("en-US", {
                                   minimumFractionDigits: 2,
                                   maximumFractionDigits: 2,
                                 })}
@@ -2243,7 +2290,8 @@ export default function OfficeFieldCopyView() {
                     })}
                     {renderOfficeCrewLaborWorkSummary(
                       workSummaryGridClassPdf,
-                      "pdf-ws-crew"
+                      "pdf-ws-crew",
+                      officeWorkSummaryMergedCrewKeys
                     )}
                   </div>
 
@@ -2834,7 +2882,7 @@ export default function OfficeFieldCopyView() {
                       $
                     </span>
                   </div>
-                  {workSummaryRows.map((item) => {
+                  {officeWorkSummaryDisplayRows.map((item) => {
                     if (item.dataType === "Material") {
                       const laborLike = isLaborLikeEntry(item);
                       const rowCost = getBidStyleWorkSummaryCost(item);
@@ -2846,15 +2894,10 @@ export default function OfficeFieldCopyView() {
                           <span className="col-span-3 min-w-0">
                             <b className="w-[200px] inline-block">
                               {item.source === "Labor"
-                                ? String(
+                                ? getOfficeWorkSummaryDisplayLabel(item, fieldCopies) ||
+                                  String(
                                     item.reference ||
                                       item.description ||
-                                      getLaborPdfDescription({
-                                        labor: item,
-                                        groupItems:
-                                          categorizedFieldCopies?.[0]?.items,
-                                        fieldCopies,
-                                      }) ||
                                       ""
                                   ).toUpperCase()
                                 : `${item.jobType?.toUpperCase() || ""} ${
@@ -2929,12 +2972,13 @@ export default function OfficeFieldCopyView() {
                         >
                           <span className="col-span-3 min-w-0">
                             <b className="w-[200px] inline-block">
-                              {getLaborPdfDescription({
-                                labor: item,
-                                groupItems:
-                                  categorizedFieldCopies?.[0]?.items,
-                                fieldCopies,
-                              })?.toUpperCase()}
+                              {getOfficeWorkSummaryDisplayLabel(item, fieldCopies) ||
+                                getLaborPdfDescription({
+                                  labor: item,
+                                  groupItems:
+                                    categorizedFieldCopies?.[0]?.items,
+                                  fieldCopies,
+                                })?.toUpperCase()}
                             </b>
                             <b>
                               {formData?.customerType === "Normal"
@@ -2963,7 +3007,10 @@ export default function OfficeFieldCopyView() {
                           <span className="min-w-0" aria-hidden />
                           <span className="justify-self-end text-end tabular-nums whitespace-nowrap">
                             <b>$</b>{" "}
-                            {getBidStyleWorkSummarySell(item).toLocaleString("en-US", {
+                            {(Number(item.totalPrice) > 0
+                              ? Number(item.totalPrice)
+                              : getBidStyleWorkSummarySell(item)
+                            ).toLocaleString("en-US", {
                               minimumFractionDigits: 2,
                               maximumFractionDigits: 2,
                             })}
@@ -2975,7 +3022,8 @@ export default function OfficeFieldCopyView() {
                   })}
                   {renderOfficeCrewLaborWorkSummary(
                     workSummaryGridClass,
-                    "view-ws-crew"
+                    "view-ws-crew",
+                    officeWorkSummaryMergedCrewKeys
                   )}
                   <hr className="my-3 border-neutral-300" />
                   {true && (

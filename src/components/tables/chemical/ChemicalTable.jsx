@@ -7,6 +7,7 @@ import parse from "html-react-parser";
 import AddChemical from "./components/AddChemical";
 import EditChemical from "./components/EditChemical";
 import DeleteChemicalMix from "./components/DeleteChemical";
+import SyncChemicalsFromMixes from "./components/SyncChemicalsFromMixes";
 
 const DELETE_ERROR_TOAST_ID = "delete-chemical-error";
 
@@ -24,6 +25,7 @@ export default function ChemicalTable() {
   const [deletedId, setDeletedId] = useState("");
   const [perPageRecords, setPerPageRecords] = useState(10);
   const [showAddChemical, setShowAddChemical] = useState(false);
+  const [showSyncFromMixes, setShowSyncFromMixes] = useState(false);
   const [showEditChemical, setShowEditChemical] = useState(false);
   const [editData, setEditData] = useState(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -221,6 +223,18 @@ export default function ChemicalTable() {
               value={term}
               onChange={(e) => setTerm(e.target.value)}
             />
+            <button
+              type="button"
+              className="btn btn-outline-secondary text-sm relative top-1"
+              onClick={() => {
+                setShowEditChemical(false);
+                setShowAddChemical(false);
+                setShowSyncFromMixes(true);
+              }}
+            >
+              <i className="fa fa-download mr-2" />
+              Import from Mixes
+            </button>
             <button
               className={`btn bg-[#00613e] text-white text-sm relative top-1 ${
                 disableBtn ? "disabled" : ""
@@ -446,6 +460,12 @@ export default function ChemicalTable() {
       <AddChemical
         show={showAddChemical}
         onClose={handleCloseAdd}
+        onSuccess={getAllChemical}
+      />
+
+      <SyncChemicalsFromMixes
+        show={showSyncFromMixes}
+        onClose={() => setShowSyncFromMixes(false)}
         onSuccess={getAllChemical}
       />
 

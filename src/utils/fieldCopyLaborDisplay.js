@@ -135,6 +135,26 @@ export function isContractorSourceLaborSummaryRow(item) {
   });
 }
 
+/** Source=Labor contractor / lump-sum lines (no crew qty) — not hourly price × qty. */
+export function isLumpSumSourceLaborRow(item) {
+  if (!item || String(item?.source || "").toLowerCase() !== "labor") return false;
+  if (isContractorSourceLaborSummaryRow(item)) return true;
+  const qty = Number(item?.quantity);
+  return !(Number.isFinite(qty) && qty > 0);
+}
+
+/** Sell total for lump-sum Source=Labor: cost + markup (ignore stray hourly price field). */
+export function getLumpSumSourceLaborLineTotal(item) {
+  const unitCost = Number(item?.cost) || 0;
+  const markupPct = parseFloat(item?.markup ?? item?.markUp) || 0;
+  if (unitCost > 0) {
+    return Math.round((unitCost * (1 + markupPct / 100)) * 100) / 100;
+  }
+  const stored = Number(item?.totalPrice);
+  if (stored > 0 && !Number.isNaN(stored)) return stored;
+  return 0;
+}
+
 /**
  * Hide contractor Source=Labor from Work Summary when crew labor exists for same job type
  * (Materials table still shows the line; summary shows JOB TYPE LABOR only).
@@ -177,6 +197,10 @@ export function shouldHideContractorLaborWorkSummaryRow(
 /** Field Copy PDF — Labor unit price (Add Field Copy formula, not 4× view logic). */
 export function getFieldCopyLaborLineDisplayPrice(item) {
   if (!item) return null;
+  if (isLumpSumSourceLaborRow(item)) {
+    const total = getLumpSumSourceLaborLineTotal(item);
+    return total > 0 ? total : null;
+  }
   const priceVal =
     item.price != null && item.price !== "" ? Number(item.price) : null;
   if (priceVal != null && !Number.isNaN(priceVal) && priceVal > 0) {
@@ -202,6 +226,9 @@ export function getFieldCopyLaborLineDisplayPrice(item) {
 /** Field Copy PDF — Labor line total (stored total or price × qty). */
 export function getFieldCopyLaborLineDisplayTotal(item) {
   if (!item) return 0;
+  if (isLumpSumSourceLaborRow(item)) {
+    return getLumpSumSourceLaborLineTotal(item);
+  }
   const stored = Number(item.totalPrice);
   if (stored > 0 && !Number.isNaN(stored)) return stored;
   const unitPrice = getFieldCopyLaborLineDisplayPrice(item);
@@ -325,12 +352,16 @@ export function getOfficeFieldCopyLineCost(item) {
 
 /** View Office Copy — PRICE column: stored unit price only. */
 export function getOfficeFieldCopyLinePrice(item) {
+  if (isLumpSumSourceLaborRow(item)) return null;
   return officeUnitPrice(item);
 }
 
 /** View Office Copy — TOTAL: price × quantity when price exists; else stored total. */
 export function getOfficeFieldCopyLineTotal(item) {
   if (!item) return 0;
+  if (isLumpSumSourceLaborRow(item)) {
+    return getLumpSumSourceLaborLineTotal(item);
+  }
   const qty = officeLineQty(item);
   const unitPrice = officeUnitPrice(item);
 
@@ -752,7 +783,7 @@ export function isLandscapeOrHardscapeLaborLabel(text) {
   return s.includes("LANDSCAPE") || s.includes("HARDSCAPE");
 }
 
-function resolveCustomerCopyInvoiceLaborJobType(item) {
+export function resolveCustomerCopyInvoiceLaborJobType(item) {
   const jt = resolveFieldCopyDisplayJobType({ jobType: item?.jobType });
   if (jt) return jt;
   const ref = stripLaborReferenceParentheses(item?.reference || "").toUpperCase();

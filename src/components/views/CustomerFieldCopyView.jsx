@@ -18,7 +18,6 @@ import {
   getOfficeFieldCopyRowCalculations,
   getCustomerCopyDisplayDescription,
   getCustomerCopyMaterialsTableMergeKey,
-  isFieldCopyLaborContext,
   lookupJobTypeCatalogRate,
   lookupLaborMapValue,
   mergeCustomerCopyInvoiceSummaryRows,
@@ -629,11 +628,9 @@ Approved by: __________________  Date: ____________________`,
       maximumFractionDigits: 2,
     });
 
-  /** PDF only — hide labor quantity column. */
-  const shouldHideCustomerCopyPdfLaborQuantity = (item) => {
-    if (String(item?.source || "").toLowerCase() === "labor") return true;
-    return isFieldCopyLaborContext(item);
-  };
+  /** Customer Copy — hide quantity for Source=Labor field-copy lines only. */
+  const shouldHideCustomerCopySourceLaborQuantity = (item) =>
+    String(item?.source || "").toLowerCase() === "labor";
 
   /** Materials & Other — merge labor rows when display description is exactly the same. */
   const customerCopyMergedTableRows = useMemo(() => {
@@ -692,6 +689,10 @@ Approved by: __________________  Date: ____________________`,
         entry.kind === "crew" ? entry.labor?.size || "" : entry.item?.size || "";
       const qtyN = calc.qtyText ? parseFloat(calc.qtyText) || 0 : 0;
 
+      const entryIsSourceLabor =
+        entry.kind === "item" &&
+        shouldHideCustomerCopySourceLaborQuantity(entry.item);
+
       if (!laborGroups.has(mergeKey)) {
         laborGroups.set(mergeKey, {
           kind: "merged-labor",
@@ -699,6 +700,7 @@ Approved by: __________________  Date: ____________________`,
           size,
           calc: { ...calc },
           qtySum: qtyN,
+          hideSourceLaborQty: entryIsSourceLabor,
         });
       } else {
         const g = laborGroups.get(mergeKey);
@@ -708,6 +710,7 @@ Approved by: __________________  Date: ____________________`,
           (Number(g.calc.displayTotal) || 0) + (Number(calc.displayTotal) || 0);
         g.qtySum = (g.qtySum || 0) + qtyN;
         if (!g.size && size) g.size = size;
+        if (entryIsSourceLabor) g.hideSourceLaborQty = true;
       }
     }
 
@@ -761,7 +764,7 @@ Approved by: __________________  Date: ____________________`,
         {customerCopyMergedTableRows.map((row, idx) => {
           if (row.kind === "merged-labor") {
             const d = row.calc;
-            const hidePdfLaborQty = isPdf;
+            const hideLaborQty = !!row.hideSourceLaborQty;
             return (
               <tr key={`${variant}-merged-labor-${idx}`}>
                 <td
@@ -780,7 +783,7 @@ Approved by: __________________  Date: ____________________`,
                   className={isPdf ? "text-xs" : undefined}
                   style={isPdf ? { textAlign: "center" } : undefined}
                 >
-                  {!hidePdfLaborQty && d.qtyText ? d.qtyText : ""}
+                  {!hideLaborQty && d.qtyText ? d.qtyText : ""}
                 </td>
                 {!isPdf && (
                   <td>{d.lineCost > 0 ? formatMoney(d.lineCost) : ""}</td>
@@ -817,8 +820,7 @@ Approved by: __________________  Date: ____________________`,
 
           const item = row.item;
           const d = getPdfItemDisplayFields(item);
-          const hidePdfLaborQty =
-            isPdf && shouldHideCustomerCopyPdfLaborQuantity(item);
+          const hideLaborQty = shouldHideCustomerCopySourceLaborQuantity(item);
           return (
             <tr key={`${variant}-item-${idx}`}>
               <td
@@ -837,7 +839,7 @@ Approved by: __________________  Date: ____________________`,
                 className={isPdf ? "text-xs" : undefined}
                 style={isPdf ? { textAlign: "center" } : undefined}
               >
-                {!hidePdfLaborQty &&
+                {!hideLaborQty &&
                   (d.qtyDisplay || (d.qty > 0 ? formatQtyCell(d.qty) : ""))}
               </td>
               {!isPdf && (
