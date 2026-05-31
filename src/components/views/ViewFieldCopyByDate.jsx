@@ -1371,14 +1371,31 @@ export default function ViewFieldCopyByDate() {
     [pdfCostNetSubtotal, pdfSalesTaxOnCost]
   );
 
-  const pdfSellTaxableDisplay = useMemo(() => {
-    if (formData?.customerType === "Exempt") return 0;
-    const fromLines = fieldCopyPdfWorkSummaryTotals.taxableSell;
-    if (fromLines > 0) return fromLines;
-    return pdfTaxableBase;
+  /** PDF download — taxable amount after tax credits (Customer Copy rules). */
+  const pdfTaxableAmountDisplay = useMemo(() => {
+    const tc = Number(formData?.taxCredits) || 0;
+    const costBase = Number(pdfCostTaxable) || 0;
+    const sellBase =
+      (Number(fieldCopyPdfWorkSummaryTotals.taxableSell) || 0) > 0
+        ? Number(fieldCopyPdfWorkSummaryTotals.taxableSell)
+        : Number(taxableAmount) || 0;
+
+    const afterCredits = (base) => {
+      if (formData?.customerType === "Exempt") return 0;
+      if (formData?.isProjectTaxable) return base - tc;
+      return tc > base ? 0 : base;
+    };
+
+    return {
+      cost: afterCredits(costBase),
+      sell: afterCredits(sellBase),
+    };
   }, [
-    fieldCopyPdfWorkSummaryTotals,
-    pdfTaxableBase,
+    pdfCostTaxable,
+    fieldCopyPdfWorkSummaryTotals.taxableSell,
+    taxableAmount,
+    formData?.taxCredits,
+    formData?.isProjectTaxable,
     formData?.customerType,
   ]);
 
@@ -2376,7 +2393,7 @@ const handleInvoiceJobType = (jobType) => {
                   <span className="col-span-3 min-w-0">TAXABLE AMOUNT</span>
                   <span className="text-end tabular-nums whitespace-nowrap">
                     <b>$</b>{" "}
-                    {pdfCostTaxable.toLocaleString("en-US", {
+                    {pdfTaxableAmountDisplay.cost.toLocaleString("en-US", {
                       minimumFractionDigits: 2,
                       maximumFractionDigits: 2,
                     })}
@@ -2385,7 +2402,7 @@ const handleInvoiceJobType = (jobType) => {
                   <span className="min-w-0" aria-hidden />
                   <span className="text-end tabular-nums whitespace-nowrap">
                     <b>$</b>{" "}
-                    {pdfSellTaxableDisplay.toLocaleString("en-US", {
+                    {pdfTaxableAmountDisplay.sell.toLocaleString("en-US", {
                       minimumFractionDigits: 2,
                       maximumFractionDigits: 2,
                     })}

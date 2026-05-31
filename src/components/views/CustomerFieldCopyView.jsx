@@ -1633,6 +1633,9 @@ Approved by: __________________  Date: ____________________`,
     return address.replace(/(\d+)/, "\n$1");
   }
 
+  const creditHighlightClass = (value) =>
+    (Number(value) || 0) > 0 ? "text-red-600" : "";
+
   // console.log("Credits Formdata", materialData, laborData);
 
   return (
@@ -1987,7 +1990,7 @@ Approved by: __________________  Date: ____________________`,
                     {true && (
                       <>
                         <div className="flex justify-between my-2">
-                          <span>
+                          <span className={creditHighlightClass(formData.taxCredits)}>
                             TAX CREDITS{" "}
                             {formData.taxDescription && (
                               <>
@@ -2000,7 +2003,7 @@ Approved by: __________________  Date: ____________________`,
                               </>
                             )}
                           </span>
-                          <span>
+                          <span className={creditHighlightClass(formData.taxCredits)}>
                             <b>$</b>{" "}
                             <span className="inline-block w-[80px] text-end">
                               {" "}
@@ -2012,7 +2015,9 @@ Approved by: __________________  Date: ____________________`,
                           </span>
                         </div>
                         <div className="flex justify-between my-2">
-                          <span>
+                          <span
+                            className={creditHighlightClass(formData.nonTaxCredits)}
+                          >
                             NON TAX CREDITS{" "}
                             {formData.nonTaxDescription && (
                               <>
@@ -2025,7 +2030,9 @@ Approved by: __________________  Date: ____________________`,
                               </>
                             )}
                           </span>
-                          <span>
+                          <span
+                            className={creditHighlightClass(formData.nonTaxCredits)}
+                          >
                             <b>$</b>{" "}
                             <span className="inline-block w-[80px] text-end">
                               {" "}
@@ -2316,7 +2323,7 @@ Approved by: __________________  Date: ____________________`,
                         </span>
                       </div> */}
                       <div className="flex justify-between my-2">
-                        <span>
+                        <span className={creditHighlightClass(formData.taxCredits)}>
                           Tax Credits{" "}
                           {formData.taxDescription && (
                             <>
@@ -2328,11 +2335,11 @@ Approved by: __________________  Date: ____________________`,
                             </>
                           )}
                         </span>
-                        <span>
+                        <span className={creditHighlightClass(formData.taxCredits)}>
                           <b>$</b>{" "}
                           <input
                             type="text"
-                            className="w-16 outline-none border-b px-1 text-end"
+                            className={`w-16 outline-none border-b px-1 text-end ${creditHighlightClass(formData.taxCredits)}`}
                             value={formData.taxCredits}
                             onInput={(e) => {
                               let val = e.target.value.replace(/[^0-9]/g, "");
@@ -2350,7 +2357,9 @@ Approved by: __________________  Date: ____________________`,
                         </span>
                       </div>
                       <div className="flex justify-between my-2">
-                        <span>
+                        <span
+                          className={creditHighlightClass(formData.nonTaxCredits)}
+                        >
                           Non Tax Credits{" "}
                           {formData.nonTaxDescription && (
                             <>
@@ -2363,11 +2372,13 @@ Approved by: __________________  Date: ____________________`,
                             </>
                           )}
                         </span>
-                        <span>
+                        <span
+                          className={creditHighlightClass(formData.nonTaxCredits)}
+                        >
                           <b>$</b>{" "}
                           <input
                             type="text"
-                            className="w-16 outline-none border-b px-1 text-end"
+                            className={`w-16 outline-none border-b px-1 text-end ${creditHighlightClass(formData.nonTaxCredits)}`}
                             value={formData.nonTaxCredits}
                             onInput={(e) => {
                               let val = e.target.value.replace(/[^0-9]/g, "");

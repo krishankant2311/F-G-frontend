@@ -844,32 +844,46 @@ export default function OfficeFieldCopyView() {
     invoiceCostTaxable,
   ]);
 
-  const invoiceCostGrandTotal = useMemo(() => {
-    const tc = Number(formData.taxCredits) || 0;
-    const ntc = Number(formData.nonTaxCredits) || 0;
-    const subtotalCost = Number(invoiceCostSubtotal) || 0;
-    return subtotalCost - tc - ntc + invoiceSalesTaxOnCost;
-  }, [
-    invoiceCostSubtotal,
-    invoiceSalesTaxOnCost,
-    formData.taxCredits,
-    formData.nonTaxCredits,
-  ]);
+  /** Subtotal / taxable / grand-total display — same rules as Customer Copy. */
+  const officeInvoiceSummaryDisplay = useMemo(() => {
+    const tc = Number(formData?.taxCredits) || 0;
+    const ntc = Number(formData?.nonTaxCredits) || 0;
+    const netSellSubtotal =
+      (Number(invoiceSellSubtotal) || 0) - tc - ntc;
+    const netCostSubtotal =
+      (Number(invoiceCostSubtotal) || 0) - tc - ntc;
+    const sellTaxableBase = Number(invoiceSellTaxable) || 0;
+    const costTaxableBase = Number(invoiceCostTaxable) || 0;
 
-  const invoiceSellGrandTotal = useMemo(() => {
-    const tc = Number(formData.taxCredits) || 0;
-    const ntc = Number(formData.nonTaxCredits) || 0;
-    return (
-      Number(invoiceSellSubtotal) -
-      tc -
-      ntc +
-      (Number(invoiceSalesTax) || 0)
-    );
+    const displaySellTaxable = formData?.isProjectTaxable
+      ? sellTaxableBase - tc
+      : tc > sellTaxableBase
+        ? 0
+        : sellTaxableBase;
+    const displayCostTaxable = formData?.isProjectTaxable
+      ? costTaxableBase - tc
+      : tc > costTaxableBase
+        ? 0
+        : costTaxableBase;
+
+    return {
+      netSellSubtotal,
+      netCostSubtotal,
+      displaySellTaxable,
+      displayCostTaxable,
+      sellGrandTotal: netSellSubtotal + (Number(invoiceSalesTax) || 0),
+      costGrandTotal: netCostSubtotal + (Number(invoiceSalesTaxOnCost) || 0),
+    };
   }, [
+    formData?.taxCredits,
+    formData?.nonTaxCredits,
+    formData?.isProjectTaxable,
     invoiceSellSubtotal,
+    invoiceCostSubtotal,
+    invoiceSellTaxable,
+    invoiceCostTaxable,
     invoiceSalesTax,
-    formData.taxCredits,
-    formData.nonTaxCredits,
+    invoiceSalesTaxOnCost,
   ]);
 
   useEffect(() => {
@@ -2372,10 +2386,10 @@ export default function OfficeFieldCopyView() {
                       >
                         <span className="col-span-3 min-w-0">SUBTOTAL</span>
                         <span className="text-end tabular-nums whitespace-nowrap">
-                          {invoiceCostSubtotal > 0 ? (
+                          {officeInvoiceSummaryDisplay.netCostSubtotal > 0 ? (
                             <>
                               <b>$</b>{" "}
-                              {invoiceCostSubtotal.toLocaleString("en-US", {
+                              {officeInvoiceSummaryDisplay.netCostSubtotal.toLocaleString("en-US", {
                                 minimumFractionDigits: 2,
                                 maximumFractionDigits: 2,
                               })}
@@ -2388,7 +2402,7 @@ export default function OfficeFieldCopyView() {
                         <span className="min-w-0" aria-hidden />
                         <span className="text-end tabular-nums whitespace-nowrap">
                           <b>$</b>{" "}
-                          {Number(invoiceSellSubtotal).toLocaleString("en-US", {
+                          {Number(officeInvoiceSummaryDisplay.netSellSubtotal).toLocaleString("en-US", {
                             minimumFractionDigits: 2,
                             maximumFractionDigits: 2,
                           })}
@@ -2435,23 +2449,19 @@ export default function OfficeFieldCopyView() {
                           TAXABLE AMOUNT
                         </span>
                         <span className="text-end tabular-nums whitespace-nowrap">
-                          {invoiceCostTaxable > 0 ? (
-                            <>
-                              <b>$</b>{" "}
-                              {invoiceCostTaxable.toLocaleString("en-US", {
-                                minimumFractionDigits: 2,
-                                maximumFractionDigits: 2,
-                              })}
-                            </>
-                          ) : (
-                            ""
-                          )}
+                          <>
+                            <b>$</b>{" "}
+                            {officeInvoiceSummaryDisplay.displayCostTaxable.toLocaleString("en-US", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}
+                          </>
                         </span>
                         <span className="min-w-0" aria-hidden />
                         <span className="min-w-0" aria-hidden />
                         <span className="text-end tabular-nums whitespace-nowrap">
                           <b>$</b>{" "}
-                          {Number(invoiceSellTaxable).toLocaleString("en-US", {
+                          {Number(officeInvoiceSummaryDisplay.displaySellTaxable).toLocaleString("en-US", {
                             minimumFractionDigits: 2,
                             maximumFractionDigits: 2,
                           })}
@@ -2493,10 +2503,10 @@ export default function OfficeFieldCopyView() {
                       >
                         <span className="col-span-3 min-w-0">GRAND TOTAL</span>
                         <span className="text-end tabular-nums whitespace-nowrap">
-                          {invoiceCostGrandTotal > 0 ? (
+                          {officeInvoiceSummaryDisplay.costGrandTotal > 0 ? (
                             <>
                               <b>$</b>{" "}
-                              {invoiceCostGrandTotal.toLocaleString("en-US", {
+                              {officeInvoiceSummaryDisplay.costGrandTotal.toLocaleString("en-US", {
                                 minimumFractionDigits: 2,
                                 maximumFractionDigits: 2,
                               })}
@@ -2509,7 +2519,7 @@ export default function OfficeFieldCopyView() {
                         <span className="min-w-0" aria-hidden />
                         <span className="text-end tabular-nums whitespace-nowrap border-b border-black pb-[7px]">
                           <b>$</b>{" "}
-                          {invoiceSellGrandTotal.toLocaleString("en-US", {
+                          {officeInvoiceSummaryDisplay.sellGrandTotal.toLocaleString("en-US", {
                             minimumFractionDigits: 2,
                             maximumFractionDigits: 2,
                           })}
@@ -3110,10 +3120,10 @@ export default function OfficeFieldCopyView() {
                   >
                     <span className="col-span-3 min-w-0">Subtotal</span>
                     <span className="justify-self-end text-end tabular-nums whitespace-nowrap">
-                      {invoiceCostSubtotal > 0 ? (
+                      {officeInvoiceSummaryDisplay.netCostSubtotal > 0 ? (
                         <>
                           <b>$</b>{" "}
-                          {invoiceCostSubtotal.toLocaleString("en-US", {
+                          {officeInvoiceSummaryDisplay.netCostSubtotal.toLocaleString("en-US", {
                             minimumFractionDigits: 2,
                             maximumFractionDigits: 2,
                           })}
@@ -3126,7 +3136,7 @@ export default function OfficeFieldCopyView() {
                     <span className="min-w-0" aria-hidden />
                     <span className="justify-self-end text-end tabular-nums whitespace-nowrap">
                       <b>$</b>{" "}
-                      {Number(invoiceSellSubtotal).toLocaleString("en-US", {
+                      {Number(officeInvoiceSummaryDisplay.netSellSubtotal).toLocaleString("en-US", {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}
@@ -3138,23 +3148,19 @@ export default function OfficeFieldCopyView() {
                   >
                     <span className="col-span-3 min-w-0">Taxable Amount</span>
                     <span className="justify-self-end text-end tabular-nums whitespace-nowrap">
-                      {invoiceCostTaxable > 0 ? (
-                        <>
-                          <b>$</b>{" "}
-                          {invoiceCostTaxable.toLocaleString("en-US", {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </>
-                      ) : (
-                        ""
-                      )}
+                      <>
+                        <b>$</b>{" "}
+                        {officeInvoiceSummaryDisplay.displayCostTaxable.toLocaleString("en-US", {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}
+                      </>
                     </span>
                     <span className="min-w-0" aria-hidden />
                     <span className="min-w-0" aria-hidden />
                     <span className="justify-self-end text-end tabular-nums whitespace-nowrap">
                       <b>$</b>{" "}
-                      {Number(invoiceSellTaxable).toLocaleString("en-US", {
+                      {Number(officeInvoiceSummaryDisplay.displaySellTaxable).toLocaleString("en-US", {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}
@@ -3196,10 +3202,10 @@ export default function OfficeFieldCopyView() {
                   >
                     <span className="col-span-3 min-w-0">Grand Total</span>
                     <span className="justify-self-end text-end tabular-nums whitespace-nowrap">
-                      {invoiceCostGrandTotal > 0 ? (
+                      {officeInvoiceSummaryDisplay.costGrandTotal > 0 ? (
                         <>
                           <b>$</b>{" "}
-                          {invoiceCostGrandTotal.toLocaleString("en-US", {
+                          {officeInvoiceSummaryDisplay.costGrandTotal.toLocaleString("en-US", {
                             minimumFractionDigits: 2,
                             maximumFractionDigits: 2,
                           })}
@@ -3212,7 +3218,7 @@ export default function OfficeFieldCopyView() {
                     <span className="min-w-0" aria-hidden />
                     <span className="justify-self-end text-end tabular-nums whitespace-nowrap">
                       <b>$</b>{" "}
-                      {invoiceSellGrandTotal.toLocaleString("en-US", {
+                      {officeInvoiceSummaryDisplay.sellGrandTotal.toLocaleString("en-US", {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}
