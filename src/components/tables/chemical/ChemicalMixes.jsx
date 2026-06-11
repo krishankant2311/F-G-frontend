@@ -644,6 +644,10 @@ import "react-toastify/dist/ReactToastify.css";
 import EditChemicalMix from "./components/EditChemicalMix";
 import DeleteChemicalMix from "./components/DeleteChemicalMix";
 import { useNavigate } from "react-router-dom";
+import {
+  resolveChemicalMixLinePricing,
+  sumChemicalMixTankTotals,
+} from "../../../utils/chemicalMixPricing";
 
 const DELETE_MIX_ERROR_TOAST_ID = "delete-mix-error";
 const DELETE_MIX_SUCCESS_TOAST_ID = "delete-mix-success";
@@ -792,7 +796,9 @@ const ChemicalMixes = () => {
           </div>
         )}
         {!loading && mixes.length === 0 && <p>No chemical mixes available.</p>}
-        {!loading && mixes.map((mix, idx) => (
+        {!loading && mixes.map((mix, idx) => {
+          const mixTotals = sumChemicalMixTankTotals(mix.chemicals);
+          return (
           <div key={idx} className="border mb-8">
             <table className="w-full border-collapse text-sm">
               <thead>
@@ -834,7 +840,9 @@ const ChemicalMixes = () => {
                 </tr>
 
                 {/* ===== ITEMS ===== */}
-                {mix.chemicals?.map((item, i) => (
+                {mix.chemicals?.map((item, i) => {
+                  const line = resolveChemicalMixLinePricing(item);
+                  return (
                   <tr key={i}>
                     <td className="border p-2"></td>
                     <td className="border p-2">
@@ -849,38 +857,33 @@ const ChemicalMixes = () => {
                     <td className="border p-2">{item.type}</td>
                     <td className="border p-2 text-center">{item.quantity}</td>
                     <td className="border p-2 text-center">
-                      ${Number(item.costPerOz || 0).toFixed(2)}
+                      ${Number(line.costPerOz).toFixed(2)}
                     </td>
                     <td className="border p-2 text-center">
-                      ${(
-                        Number(item.quantity || 0) *
-                        Number(item.costPerOz || 0)
-                      ).toFixed(2)}
+                      ${line.totalCost.toFixed(2)}
                     </td>
                     <td className="border p-2 text-center">
-                      ${Number(item.pricePerOz || 0).toFixed(2)}
+                      ${Number(line.pricePerOz).toFixed(2)}
                     </td>
                     <td className="border p-2 text-center">
-                      ${(
-                        Number(item.quantity || 0) *
-                        Number(item.pricePerOz || 0)
-                      ).toFixed(2)}
+                      ${line.totalPrice.toFixed(2)}
                     </td>
                     <td className="border p-2"></td>
                   </tr>
-                ))}
+                  );
+                })}
 
                 <tr>
                   <td colSpan={9} className="bg-green-200 p-2 font-semibold">
                     COST PER TANK: $
-                    {Number(mix.totalCostPerTank || 0).toFixed(2)}
+                    {mixTotals.totalCostPerTank.toFixed(2)}
                   </td>
                 </tr>
 
                 <tr className="">
                   <td colSpan={9} className="bg-blue-200 p-2 font-semibold ">
                     PRICE PER TANK: $
-                    {Number(mix.totalPricePerTank || 0).toFixed(2)}
+                    {mixTotals.totalPricePerTank.toFixed(2)}
                   </td>
                 </tr>
 
@@ -905,7 +908,8 @@ const ChemicalMixes = () => {
               </tbody>
             </table>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* ===== EDIT MODAL ===== */}

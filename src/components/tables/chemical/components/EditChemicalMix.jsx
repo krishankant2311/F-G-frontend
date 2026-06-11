@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 import { toast } from "react-toastify";
+import {
+  applyChemicalMixPerOzPricing,
+} from "../../../../utils/chemicalMixPricing";
 
 const UPDATE_MIX_ERROR_TOAST_ID = "update-mix-error";
 const UPDATE_MIX_SUCCESS_TOAST_ID = "update-mix-success";
@@ -62,18 +65,20 @@ const EditChemicalMix = ({ mix, onClose, onSuccess }) => {
       setMixName(mix.mixName || "");
       setNotes(mix.notes || "");
       setChemicals(
-        mix.chemicals?.map((item) => ({
-          chemicalName: item.chemicalName || item.brandName || "",
-          quantity: item.quantity || "",
-          measure: item.measure || "OZ / 100 GAL",
-          brandName: item.brandName || "",
-          epaRegNo: item.epaRegNo || "",
-          type: item.type || "",
-          cost: item.cost || "",
-          price: item.price || "",
-          costPerOz: item.costPerOz || "",
-          pricePerOz: item.pricePerOz || "",
-        })) || [{ ...emptyChemical }]
+        mix.chemicals?.map((item) =>
+          applyChemicalMixPerOzPricing({
+            chemicalName: item.chemicalName || item.brandName || "",
+            quantity: item.quantity || "",
+            measure: item.measure || "OZ / 100 GAL",
+            brandName: item.brandName || "",
+            epaRegNo: item.epaRegNo || "",
+            type: item.type || "",
+            cost: item.cost || "",
+            price: item.price || "",
+            costPerOz: item.costPerOz || "",
+            pricePerOz: item.pricePerOz || "",
+          })
+        ) || [{ ...emptyChemical }]
       );
     }
   }, [mix]);
@@ -82,17 +87,7 @@ const EditChemicalMix = ({ mix, onClose, onSuccess }) => {
   const handleChange = (index, field, value) => {
     const updated = [...chemicals];
     updated[index][field] = value;
-
-    const qty = parseFloat(updated[index].quantity);
-    const cost = parseFloat(updated[index].cost);
-    const price = parseFloat(updated[index].price);
-
-    updated[index].costPerOz =
-      qty > 0 && cost >= 0 ? (cost / qty).toFixed(2) : "";
-
-    updated[index].pricePerOz =
-      qty > 0 && price >= 0 ? (price / qty).toFixed(2) : "";
-
+    updated[index] = applyChemicalMixPerOzPricing(updated[index]);
     setChemicals(updated);
   };
 
@@ -116,14 +111,7 @@ const EditChemicalMix = ({ mix, onClose, onSuccess }) => {
         price: selected.price ?? "",
       };
 
-      const qty = parseFloat(updated[index].quantity);
-      const cost = parseFloat(updated[index].cost);
-      const price = parseFloat(updated[index].price);
-
-      updated[index].costPerOz =
-        qty > 0 && cost >= 0 ? (cost / qty).toFixed(2) : "";
-      updated[index].pricePerOz =
-        qty > 0 && price >= 0 ? (price / qty).toFixed(2) : "";
+      updated[index] = applyChemicalMixPerOzPricing(updated[index]);
     } else {
       updated[index].chemicalName = chemicalName;
     }
@@ -194,9 +182,10 @@ const EditChemicalMix = ({ mix, onClose, onSuccess }) => {
       return;
     }
 
+    const normalizedChemicals = chemicals.map(applyChemicalMixPerOzPricing);
     const payload = {
       mixName,
-      chemicals,
+      chemicals: normalizedChemicals,
       totalCostPerTank,
       totalPricePerTank,
       notes,

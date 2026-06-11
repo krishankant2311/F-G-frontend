@@ -762,8 +762,58 @@ export function getCustomerCopyDisplayDescription(item) {
   return ref.toUpperCase();
 }
 
+/** Customer Copy Materials table — reference after vendor suffix is removed from labor lines. */
+function getCustomerCopyMaterialsTableLaborRefAfterVendorStrip(item) {
+  const ref = String(item?.reference || item?.description || "").trim();
+  if (!ref) return "";
+  const vendor = String(item?.vendorName ?? item?.vendor ?? "").trim();
+  let displayRef = ref;
+  if (vendor) {
+    const vendorSuffix = ` (${vendor})`;
+    if (displayRef.toUpperCase().endsWith(vendorSuffix.toUpperCase())) {
+      displayRef = displayRef.slice(0, -vendorSuffix.length);
+    }
+  } else {
+    const parenGroups = displayRef.match(/\([^)]*\)/g);
+    if (parenGroups && parenGroups.length >= 2) {
+      const lastGroup = parenGroups[parenGroups.length - 1];
+      const lastIdx = displayRef.lastIndexOf(lastGroup);
+      if (lastIdx > 0) {
+        displayRef = displayRef.slice(0, lastIdx).trimEnd();
+      }
+    }
+  }
+  return displayRef;
+}
+
+function getCustomerCopyMaterialsTableLaborLabel(displayRef) {
+  if (!displayRef) return "";
+  if (/\([^)]+\)/.test(displayRef)) {
+    return displayRef.replace(/\s+/g, " ").toUpperCase();
+  }
+  return stripLaborReferenceParentheses(displayRef).toUpperCase();
+}
+
 /**
- * Customer Copy Materials table — merge labor/crew rows when display description matches exactly.
+ * Customer Copy Materials table — label; keeps "(DEANS)" etc. when present on the line.
+ * Invoice summary still uses getCustomerCopyDisplayDescription (strips parentheses).
+ */
+export function getCustomerCopyMaterialsTableDisplayDescription(item) {
+  const ref = String(item?.reference || item?.description || "").trim();
+  if (!ref) return "";
+  const isLaborLine =
+    item?.dataType === "Labor" ||
+    String(item?.source || "").toLowerCase() === "labor" ||
+    isFieldCopyLaborContext(item);
+  if (!isLaborLine) return ref.toUpperCase();
+  return getCustomerCopyMaterialsTableLaborLabel(
+    getCustomerCopyMaterialsTableLaborRefAfterVendorStrip(item)
+  );
+}
+
+/**
+ * Customer Copy Materials table — merge labor/crew rows when display label matches.
+ * Vendor-only suffixes merge into the base labor row; other (...) text stays separate.
  */
 export function getCustomerCopyMaterialsTableMergeKey(item) {
   if (!item) return null;
@@ -772,8 +822,11 @@ export function getCustomerCopyMaterialsTableMergeKey(item) {
     String(item?.source || "").toLowerCase() === "labor" ||
     isFieldCopyLaborContext(item);
   if (!isLaborLine) return null;
-  const desc = getCustomerCopyDisplayDescription(item);
-  return desc || null;
+
+  const label = getCustomerCopyMaterialsTableLaborLabel(
+    getCustomerCopyMaterialsTableLaborRefAfterVendorStrip(item)
+  );
+  return label || null;
 }
 
 /** Customer Copy Materials table — LANDSCAPE/HARDSCAPE LABOR rows (hide qty & cost). */

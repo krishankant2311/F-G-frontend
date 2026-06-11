@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { toast, ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
+import { applyChemicalMixPerOzPricing } from "../../../../utils/chemicalMixPricing";
 
 const ADD_MIX_ERROR_TOAST_ID = "add-mix-error";
 const ADD_MIX_SUCCESS_TOAST_ID = "add-mix-success";
@@ -35,23 +36,7 @@ const AddNewMix = () => {
   const handleChange = (index, field, value) => {
     const updated = [...chemicals];
     updated[index][field] = value;
-
-    const qty = parseFloat(updated[index].quantity);
-    const cost = parseFloat(updated[index].cost);
-    const price = parseFloat(updated[index].price);
-
-    if (qty > 0 && cost >= 0) {
-      updated[index].costPerOz = (cost / qty).toFixed(2);
-    } else {
-      updated[index].costPerOz = "";
-    }
-
-    if (qty > 0 && price >= 0) {
-      updated[index].pricePerOz = (price / qty).toFixed(2);
-    } else {
-      updated[index].pricePerOz = "";
-    }
-
+    updated[index] = applyChemicalMixPerOzPricing(updated[index]);
     setChemicals(updated);
   };
 
@@ -130,15 +115,7 @@ const AddNewMix = () => {
         price: selected.price ?? "",
       };
 
-      // Recalculate per-oz values using existing quantity
-      const qty = parseFloat(updated[index].quantity);
-      const cost = parseFloat(updated[index].cost);
-      const price = parseFloat(updated[index].price);
-
-      updated[index].costPerOz =
-        qty > 0 && cost >= 0 ? (cost / qty).toFixed(2) : "";
-      updated[index].pricePerOz =
-        qty > 0 && price >= 0 ? (price / qty).toFixed(2) : "";
+      updated[index] = applyChemicalMixPerOzPricing(updated[index]);
     } else {
       // just update name if not found in options
       updated[index].chemicalName = chemicalName;
@@ -240,9 +217,10 @@ const AddNewMix = () => {
 
       setIsSaving(true);
 
+      const normalizedChemicals = chemicals.map(applyChemicalMixPerOzPricing);
       const payload = {
         mixName,
-        chemicals,
+        chemicals: normalizedChemicals,
         totalCostPerTank,
         totalPricePerTank,
         notes,

@@ -1029,7 +1029,7 @@ export default function AddCustomer() {
                                 }
                                 className="w-full border px-2 py-1"
                               >
-                                <option value="">Select a Mix</option>
+                                <option value="">Select a Treatment</option>
                                 {availableMixes.map((mix) => (
                                   <option key={mix._id} value={mix.mixName}>
                                     {mix.mixName}

@@ -286,10 +286,22 @@ export default function AddFieldCopyForm() {
     //     return;
     //   }
     // }
-    // AUTO CALCULATION FOR LUMP SUM & LABOR
+    const isLaborOrLumpSum =
+      updatedForm.source === "Labor" || updatedForm.source === "Lump Sum";
+
+    if (name === "totalPrice" && isLaborOrLumpSum) {
+      if (value === "") {
+        updatedForm.totalPrice = "";
+      } else {
+        const parsed = parseFloat(value);
+        updatedForm.totalPrice = Number.isFinite(parsed) ? parsed : "";
+      }
+    }
+
+    // Auto-calc total price from cost + markup unless user is editing total price directly
     if (
-      updatedForm.source === "Lump Sum" ||
-      updatedForm.source === "Labor"
+      isLaborOrLumpSum &&
+      (name === "cost" || name === "markUp" || name === "markup")
     ) {
       const cost = parseFloat(updatedForm.cost) || 0;
       const markupPercent = parseFloat(updatedForm.markUp) || 0;

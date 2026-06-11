@@ -167,7 +167,8 @@ const SyncChemicalsFromMixes = ({ show, onClose, onSuccess }) => {
           <p className="text-gray-700 mb-3">
             Pulls every unique chemical name from all <strong>Chemical Mixes</strong> and
             adds missing ones to this master <strong>Chemicals</strong> list (no
-            duplicates by name).
+            duplicates by name). Cost and price are imported as <strong>per-ounce</strong>{" "}
+            values from the mix (price = 2× cost).
           </p>
 
           {loading && <p>Loading mixes and chemicals…</p>}
@@ -213,8 +214,8 @@ const SyncChemicalsFromMixes = ({ show, onClose, onSuccess }) => {
                           <th>Chemical name</th>
                           <th>Brand</th>
                           <th>Type</th>
-                          <th>Cost</th>
-                          <th>Price</th>
+                          <th>Cost (per oz)</th>
+                          <th>Price (per oz)</th>
                           <th>Used in mixes</th>
                         </tr>
                       </thead>

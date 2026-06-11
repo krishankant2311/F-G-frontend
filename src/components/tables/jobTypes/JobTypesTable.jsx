@@ -2,6 +2,7 @@ import axios from "axios";
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTableContext } from "../../../context/TableContext";
+import { resolveJobTypeDisplayCost } from "../../../utils/materialPricingDisplay";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 
@@ -298,6 +299,16 @@ export default function JobTypesTable() {
                     } ml-2`}
                   ></i>
                 </th>
+                <th onClick={() => handleSort("cost")}>
+                  Cost{" "}
+                  <i
+                    className={`${
+                      sortOrder === "asc" && sortBy === "cost"
+                        ? "fa fa-sort-amount-asc"
+                        : "fa fa-sort-amount-desc"
+                    } ml-2`}
+                  ></i>
+                </th>
                 <th onClick={() => handleSort("price")}>
                   Price{" "}
                   <i
@@ -338,6 +349,7 @@ export default function JobTypesTable() {
                     <tr key={index}>
                       {/* <td>{item._id}</td> */}
                       <td>{item.jobName}</td>
+                      <td>{resolveJobTypeDisplayCost(item)}</td>
                       <td>{item.price}</td>
                       <td>{item.isTaxable ? "Yes" : "No"}</td>
                       <td>{item.status}</td>
@@ -381,7 +393,7 @@ export default function JobTypesTable() {
                 })
               ) : (
                 <tr>
-                  <td className="text-center" colSpan="5">
+                  <td className="text-center" colSpan="6">
                     {loading ? "Loading ..." : "No Data Available"}
                   </td>
                 </tr>
@@ -390,6 +402,7 @@ export default function JobTypesTable() {
             <tfoot>
               <tr>
                 <th>Job Name</th>
+                <th>Cost</th>
                 <th>Price</th>
                 <th>Taxable</th>
                 <th>Status</th>

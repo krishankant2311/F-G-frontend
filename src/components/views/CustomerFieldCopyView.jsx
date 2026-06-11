@@ -17,6 +17,7 @@ import {
   getOfficeFieldCopyLineCost,
   getOfficeFieldCopyRowCalculations,
   getCustomerCopyDisplayDescription,
+  getCustomerCopyMaterialsTableDisplayDescription,
   getCustomerCopyMaterialsTableMergeKey,
   lookupJobTypeCatalogRate,
   lookupLaborMapValue,
@@ -684,7 +685,9 @@ Approved by: __________________  Date: ____________________`,
       if (!mergeKey) continue;
 
       const calc = entryCalc(entry);
-      const description = getCustomerCopyDisplayDescription(entryMergeItem(entry));
+      const description = getCustomerCopyMaterialsTableDisplayDescription(
+        entryMergeItem(entry)
+      );
       const size =
         entry.kind === "crew" ? entry.labor?.size || "" : entry.item?.size || "";
       const qtyN = calc.qtyText ? parseFloat(calc.qtyText) || 0 : 0;
@@ -765,6 +768,7 @@ Approved by: __________________  Date: ____________________`,
           if (row.kind === "merged-labor") {
             const d = row.calc;
             const hideLaborQty = !!row.hideSourceLaborQty;
+            const hidePdfLaborFields = isPdf;
             return (
               <tr key={`${variant}-merged-labor-${idx}`}>
                 <td
@@ -783,7 +787,9 @@ Approved by: __________________  Date: ____________________`,
                   className={isPdf ? "text-xs" : undefined}
                   style={isPdf ? { textAlign: "center" } : undefined}
                 >
-                  {!hideLaborQty && d.qtyText ? d.qtyText : ""}
+                  {!hidePdfLaborFields && !hideLaborQty && d.qtyText
+                    ? d.qtyText
+                    : ""}
                 </td>
                 {!isPdf && (
                   <td>{d.lineCost > 0 ? formatMoney(d.lineCost) : ""}</td>
@@ -804,7 +810,9 @@ Approved by: __________________  Date: ____________________`,
                   className={isPdf ? "text-xs" : undefined}
                   style={isPdf ? { textAlign: "right" } : undefined}
                 >
-                  {d.displayPrice != null && d.displayPrice > 0
+                  {!hidePdfLaborFields &&
+                  d.displayPrice != null &&
+                  d.displayPrice > 0
                     ? formatMoney(d.displayPrice)
                     : ""}
                 </td>
@@ -821,6 +829,8 @@ Approved by: __________________  Date: ____________________`,
           const item = row.item;
           const d = getPdfItemDisplayFields(item);
           const hideLaborQty = shouldHideCustomerCopySourceLaborQuantity(item);
+          const hidePdfLaborFields =
+            isPdf && String(item?.source || "").toLowerCase() === "labor";
           return (
             <tr key={`${variant}-item-${idx}`}>
               <td
@@ -839,7 +849,8 @@ Approved by: __________________  Date: ____________________`,
                 className={isPdf ? "text-xs" : undefined}
                 style={isPdf ? { textAlign: "center" } : undefined}
               >
-                {!hideLaborQty &&
+                {!hidePdfLaborFields &&
+                  !hideLaborQty &&
                   (d.qtyDisplay || (d.qty > 0 ? formatQtyCell(d.qty) : ""))}
               </td>
               {!isPdf && (
@@ -863,7 +874,8 @@ Approved by: __________________  Date: ____________________`,
                 className={isPdf ? "text-xs" : undefined}
                 style={isPdf ? { textAlign: "right" } : undefined}
               >
-                {d.displayPrice != null &&
+                {!hidePdfLaborFields &&
+                d.displayPrice != null &&
                 !Number.isNaN(d.displayPrice) &&
                 d.displayPrice > 0
                   ? formatMoney(d.displayPrice)
@@ -1355,6 +1367,7 @@ Approved by: __________________  Date: ____________________`,
             source: item.source,
             isTaxable: item.isTaxable,
             reference: item.reference,
+            vendorName: item.vendorName || item.vendor || "",
             size: item.measure,
             quantity: 0,
             price: item.price,

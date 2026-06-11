@@ -690,7 +690,7 @@ export default function StaffSidebar() {
                   onClick={() => toggleMenu("chemical")}
                 >
                   <span className="text-base">
-                    <i class="nav-icon fa fa-id-card text-sm"></i>Chemical Maintenance
+                    <i class="nav-icon fa fa-id-card text-sm"></i>Scheduled Maintenance
 
 
                   </span>

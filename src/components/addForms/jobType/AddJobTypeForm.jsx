@@ -4,11 +4,13 @@ import axios from "axios";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import { useTableContext } from "../../../context/TableContext";
+import { resolveJobTypeCostForSave } from "../../../utils/materialPricingDisplay";
 import { useNavigate } from "react-router-dom";
 
 export default function AddJobTypeForm() {
   const [formData, setFormData] = useState({
     jobName: "",
+    cost: "",
     price: 0,
     isTaxable: false,
   });
@@ -25,6 +27,14 @@ export default function AddJobTypeForm() {
       const val = e.target.value;
       if(containsNumberOrSpecialChar(val)){
         toast.error("Job Name cannot contain numbers or special characters.");
+        return;
+      }
+    }
+
+    if (e.target.name === "price") {
+      const val = e.target.value;
+      if (val < 0) {
+        toast.error("Price cannot be negative.");
         return;
       }
     }
@@ -52,7 +62,9 @@ export default function AddJobTypeForm() {
       };
       setDisableBtn(true);
       const formdata = new FormData();
+      const costVal = resolveJobTypeCostForSave(formData.price, formData.cost);
       formdata.append("jobName", formData.jobName);
+      formdata.append("cost", costVal);
       formdata.append("price", formData.price);
       formdata.append("isTaxable", formData.isTaxable);
 
@@ -116,11 +128,24 @@ export default function AddJobTypeForm() {
                   />
                 </div>
                 <div className="form-group">
-                  <label htmlFor="exampleInputEmail1">Price *</label>
+                  <label htmlFor="job-type-cost">Cost</label>
+                  <input
+                    type="text"
+                    className="form-control"
+                    id="job-type-cost"
+                    placeholder="Optional — leave blank to use 50% of price"
+                    value={formData.cost}
+                    onChange={handleInputChange}
+                    name="cost"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="job-type-price">Price *</label>
                   <input
                     type="number"
                     className="form-control"
-                    id="exampleInputEmail1"
+                    id="job-type-price"
                     placeholder="Enter Price"
                     value={formData.price}
                     onChange={handleInputChange}
