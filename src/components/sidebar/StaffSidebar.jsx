@@ -743,6 +743,15 @@ export default function StaffSidebar() {
                   </li>
                   <li className="nav-item" onClick={clearLastViewedCode}>
                     <Link
+                      to="/panel/office/chemical-maintenance/other-treatments"
+                      className="nav-link ml-2"
+                    >
+                      <i className="fa fa-circle-o nav-icon text-sm" />
+                      <p>Other Treatments</p>
+                    </Link>
+                  </li>
+                  <li className="nav-item" onClick={clearLastViewedCode}>
+                    <Link
                       to="/panel/office/chemical-maintenance/chemicals-mixs"
                       className="nav-link ml-2"
                     >

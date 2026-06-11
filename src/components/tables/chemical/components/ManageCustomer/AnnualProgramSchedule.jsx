@@ -7,6 +7,16 @@ import { toast, ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import ViewTreatmentDetails from "../Dashboard/ViewCustomer";
 import EditCustomer from "../Dashboard/EditCustomer";
+import { getCustomLocalTreatments } from "../../../../../utils/otherTreatmentLocalStore";
+import {
+  buildOtherTreatmentDropdownOptions,
+  CATALOG_OPTION_PREFIX,
+  fetchActiveMaterials,
+  getOtherTreatmentSelectionKey,
+  MATERIAL_OPTION_PREFIX,
+  resolveMaterialUnitCost,
+  resolveMaterialUnitPrice,
+} from "../../../../../utils/otherTreatmentDropdown";
 
 const CustomerAnnualProgramSchedule = () => {
   const { customerId: paramCustomerId } = useParams();
@@ -122,8 +132,10 @@ const CustomerAnnualProgramSchedule = () => {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [otherCalendarOpenIndex]);
 
-  // chemical mixes for OTHER TREATMENTS dropdown
+  // chemical mixes + catalog for OTHER TREATMENTS dropdown
   const [chemicalMixes, setChemicalMixes] = useState([]);
+  const [catalogTreatments, setCatalogTreatments] = useState([]);
+  const [materials, setMaterials] = useState([]);
 
   // other treatments form (newly added in this page)
   const [newOtherTreatments, setNewOtherTreatments] = useState([
@@ -133,6 +145,8 @@ const CustomerAnnualProgramSchedule = () => {
       scheduledDate: "",
       scheduledDates: [],
       mixData: null,
+      catalogData: null,
+      materialData: null,
       treatmentName: "", // Custom name for "Other" option
       price: "", // For "Other" option
       cost: "", // For "Other" option
@@ -152,10 +166,62 @@ const CustomerAnnualProgramSchedule = () => {
   const SCHEDULE_ERROR_TOAST_ID = "annual-schedule-error";
   const SCHEDULE_SUCCESS_TOAST_ID = "annual-schedule-success";
 
-  // Fetch chemical mixes
+  // Fetch chemical mixes and other-treatment catalog
   useEffect(() => {
     fetchChemicalMixes();
+    fetchTreatmentCatalog();
+    fetchMaterialsList();
   }, []);
+
+  const fetchMaterialsList = async () => {
+    try {
+      const token = localStorage.getItem("f&gstafftoken");
+      const items = await fetchActiveMaterials(
+        process.env.REACT_APP_API_BASE_URL,
+        token
+      );
+      setMaterials(items);
+    } catch (error) {
+      console.error("Failed to load materials:", error);
+    }
+  };
+
+  const fetchTreatmentCatalog = async () => {
+    try {
+      const token = localStorage.getItem("f&gstafftoken");
+      if (!token) return;
+
+      const res = await axios.get(
+        `${process.env.REACT_APP_API_BASE_URL}/chemical-maintenance/get-all-other-treatment`,
+        {
+          headers: { token },
+          params: { page: 1, limit: 500, sortby: "sortOrder", sortorder: 1 },
+        }
+      );
+
+      if (res.data.statusCode === 200) {
+        const items = res.data.result?.treatments || [];
+        const localOther = getCustomLocalTreatments().filter(
+          (t) => t.programType === "other"
+        );
+        const apiCatalog = items.filter((t) => t.programType === "other");
+        const seen = new Set(
+          apiCatalog.map((t) => String(t.treatmentName).trim().toUpperCase())
+        );
+        setCatalogTreatments([
+          ...apiCatalog,
+          ...localOther.filter(
+            (t) => !seen.has(String(t.treatmentName).trim().toUpperCase())
+          ),
+        ]);
+      }
+    } catch (error) {
+      console.error("Failed to load treatment catalog:", error);
+      setCatalogTreatments(
+        getCustomLocalTreatments().filter((t) => t.programType === "other")
+      );
+    }
+  };
 
   const fetchChemicalMixes = async () => {
     try {
@@ -550,12 +616,16 @@ const CustomerAnnualProgramSchedule = () => {
         scheduledDate: "",
         scheduledDates: [],
         mixData: null,
+        catalogData: null,
+        materialData: null,
         treatmentName: "", // Custom name for "Other" option
         price: "", // For "Other" option
         cost: "", // For "Other" option
       },
     ]);
   };
+
+  const getOtherTreatmentRowKey = getOtherTreatmentSelectionKey;
 
   const removeOtherTreatment = (index) => {
     setNewOtherTreatments(newOtherTreatments.filter((_, i) => i !== index));
@@ -694,32 +764,81 @@ const CustomerAnnualProgramSchedule = () => {
   const handleOtherTreatmentChange = (index, field, value) => {
     const updated = [...newOtherTreatments];
     
-    // If changing treatment, store full mix data or handle "Other" option
     if (field === "treatment" && value) {
-      // Allow multiple "Other" entries, but check duplicates for mix names
       if (value !== "Other") {
         const isDuplicate = newOtherTreatments.some(
-          (row, i) => i !== index && row.treatment === value
+          (row, i) => i !== index && getOtherTreatmentRowKey(row) === value
         );
-        
+
         if (isDuplicate) {
           toast.error("This treatment is already selected. Please choose a different treatment.");
           return;
         }
       }
 
-      const selectedMix = chemicalMixes.find((mix) => mix.mixName === value);
-      updated[index] = {
-        ...updated[index],
-        treatment: value,
-        mixData: value === "Other" ? null : (selectedMix || null),
-        treatmentName: value === "Other" ? updated[index].treatmentName : "",
-        // For mix: populate price/cost from mix; for "Other" keep existing
-        price: value === "Other" ? updated[index].price : (selectedMix ? (selectedMix.totalPricePerTank ?? "") : ""),
-        cost: value === "Other" ? updated[index].cost : (selectedMix ? (selectedMix.totalCostPerTank ?? "") : ""),
+      const baseReset = {
         scheduledDate: "",
         scheduledDates: [],
+        treatmentName: value === "Other" ? updated[index].treatmentName : "",
       };
+
+      if (value.startsWith(MATERIAL_OPTION_PREFIX)) {
+        const materialId = value.slice(MATERIAL_OPTION_PREFIX.length);
+        const materialItem = materials.find((m) => m._id === materialId);
+        updated[index] = {
+          ...updated[index],
+          ...baseReset,
+          treatment: materialItem?.name || "",
+          mixData: null,
+          catalogData: null,
+          materialData: materialItem || null,
+          price: materialItem
+            ? resolveMaterialUnitPrice(
+                materialItem,
+                maintenanceEnabledNormalized
+              )
+            : "",
+          cost: materialItem ? resolveMaterialUnitCost(materialItem) : "",
+        };
+      } else if (value.startsWith(CATALOG_OPTION_PREFIX)) {
+        const catalogId = value.slice(CATALOG_OPTION_PREFIX.length);
+        const catalogItem = catalogTreatments.find((c) => c._id === catalogId);
+        updated[index] = {
+          ...updated[index],
+          ...baseReset,
+          treatment: catalogItem?.treatmentName || "",
+          mixData: null,
+          catalogData: catalogItem || null,
+          materialData: null,
+          price: catalogItem
+            ? maintenanceEnabledNormalized
+              ? catalogItem.lowerPrice ?? catalogItem.price ?? ""
+              : catalogItem.price ?? ""
+            : "",
+          cost: catalogItem?.cost ?? "",
+        };
+      } else if (value === "Other") {
+        updated[index] = {
+          ...updated[index],
+          ...baseReset,
+          treatment: "Other",
+          mixData: null,
+          catalogData: null,
+          materialData: null,
+        };
+      } else {
+        const selectedMix = chemicalMixes.find((mix) => mix.mixName === value);
+        updated[index] = {
+          ...updated[index],
+          ...baseReset,
+          treatment: value,
+          mixData: selectedMix || null,
+          catalogData: null,
+          materialData: null,
+          price: selectedMix ? selectedMix.totalPricePerTank ?? "" : "",
+          cost: selectedMix ? selectedMix.totalCostPerTank ?? "" : "",
+        };
+      }
       } else {
         if (field === "scheduledDate") {
         const cur = Array.isArray(updated[index].scheduledDates)
@@ -1052,11 +1171,40 @@ const CustomerAnnualProgramSchedule = () => {
           const baseData = {
             treatment: ot.treatment,
             qty: wholeQuantity(ot.quantity || 0),
-            projectCode: "", // Can be added later if needed
+            projectCode: "",
             status: "Scheduled",
           };
 
-          // Include full mix data if available
+          if (ot.materialData) {
+            const unitCost = resolveMaterialUnitCost(ot.materialData);
+            const pricePerTank = resolveMaterialUnitPrice(
+              ot.materialData,
+              maintenanceEnabledNormalized
+            );
+            return uniqDates.map((d) => ({
+              ...baseData,
+              date: d,
+              treatment: ot.materialData.name,
+              totalCostPerTank: unitCost,
+              totalPricePerTank: pricePerTank,
+              materialId: ot.materialData._id,
+            }));
+          }
+
+          if (ot.catalogData) {
+            const pricePerTank = maintenanceEnabledNormalized
+              ? (ot.catalogData.lowerPrice ?? ot.catalogData.price ?? 0)
+              : (ot.catalogData.price ?? 0);
+            return uniqDates.map((d) => ({
+              ...baseData,
+              date: d,
+              treatment: ot.catalogData.treatmentName,
+              totalCostPerTank: ot.catalogData.cost || 0,
+              totalPricePerTank: pricePerTank,
+              treatmentCatalogId: ot.catalogData._id,
+            }));
+          }
+
           if (ot.mixData) {
             return uniqDates.map((d) => ({
               ...baseData,
@@ -1487,38 +1635,49 @@ const CustomerAnnualProgramSchedule = () => {
 
           <tbody>
             {newOtherTreatments.map((item, index) => {
-              // Get all treatment names that are already in the upper table (scheduledTreatments)
               const scheduledTreatmentNames = scheduledTreatments.map(
                 (st) => st.treatment
               );
 
-              // Filter out treatments that are:
-              // 1. Already in the upper table (scheduledTreatments)
-              // 2. Already selected in other rows of OTHER TREATMENTS (except current row)
-              const availableMixes = chemicalMixes.filter((mix) => {
-                // Exclude if already in upper table
-                const isInScheduledTable = scheduledTreatmentNames.includes(mix.mixName);
-                
-                // Exclude if already selected in other OTHER TREATMENTS rows
-                const isSelectedInOtherRow = newOtherTreatments.some(
-                  (r, i) => i !== index && r.treatment === mix.mixName
+              const isKeyTakenElsewhere = (key) => {
+                if (!key) return false;
+                if (key.startsWith(MATERIAL_OPTION_PREFIX)) {
+                  const materialId = key.slice(MATERIAL_OPTION_PREFIX.length);
+                  const materialItem = materials.find((m) => m._id === materialId);
+                  if (
+                    materialItem &&
+                    scheduledTreatmentNames.includes(materialItem.name)
+                  ) {
+                    return true;
+                  }
+                } else if (key.startsWith(CATALOG_OPTION_PREFIX)) {
+                  const catalogId = key.slice(CATALOG_OPTION_PREFIX.length);
+                  const catalogItem = catalogTreatments.find((c) => c._id === catalogId);
+                  if (
+                    catalogItem &&
+                    scheduledTreatmentNames.includes(catalogItem.treatmentName)
+                  ) {
+                    return true;
+                  }
+                } else if (scheduledTreatmentNames.includes(key)) {
+                  return true;
+                }
+                return newOtherTreatments.some(
+                  (r, i) => i !== index && getOtherTreatmentRowKey(r) === key
                 );
-                
-                return !isInScheduledTable && !isSelectedInOtherRow;
+              };
+
+              const dropdownOptions = buildOtherTreatmentDropdownOptions({
+                chemicalMixes: chemicalMixes.filter(
+                  (mix) => !scheduledTreatmentNames.includes(mix.mixName)
+                ),
+                materials,
+                isKeyTaken: isKeyTakenElsewhere,
               });
 
-              // Check if there are any unselected treatments available for adding new row
-              // "Other" entries don't count against the limit - we can always add more "Other" entries
-              const selectedMixTreatments = [
-                ...scheduledTreatmentNames,
-                ...newOtherTreatments
-                  .map((r) => r.treatment)
-                  .filter((t) => t && t.trim() !== "" && t !== "Other"),
-              ];
-              // Allow adding new row if there are unselected mixes OR if we want to add another "Other"
-              const hasUnselectedTreatments =
-                selectedMixTreatments.length < chemicalMixes.length;
-              const canAddMoreRows = hasUnselectedTreatments || true; // Always allow adding "Other" entries
+              const selectedTreatmentValue = getOtherTreatmentSelectionKey(item);
+
+              const canAddMoreRows = true;
 
               return (
                 <tr key={index}>
@@ -1536,16 +1695,16 @@ const CustomerAnnualProgramSchedule = () => {
                       />
                     ) : (
                       <select
-                        value={item.treatment}
+                        value={selectedTreatmentValue}
                         onChange={(e) =>
                           handleOtherTreatmentChange(index, "treatment", e.target.value)
                         }
                         className="w-full border px-2 py-1"
                       >
-                        <option value="">Select a Treatment</option>
-                        {availableMixes.map((mix) => (
-                          <option key={mix._id} value={mix.mixName}>
-                            {mix.mixName}
+                        <option value="">Select Treatment</option>
+                        {dropdownOptions.map((opt) => (
+                          <option key={opt.key} value={opt.key}>
+                            {opt.label}
                           </option>
                         ))}
                         <option value="Other">Other</option>
@@ -1713,7 +1872,7 @@ const CustomerAnnualProgramSchedule = () => {
                     })()}
                   </td>
 
-                  {/* Cost - editable for "Other", from mix for selected mix */}
+                  {/* Cost - editable for "Other", from catalog or mix when selected */}
                   <td>
                     {item.treatment === "Other" ? (
                       <input
@@ -1727,6 +1886,14 @@ const CustomerAnnualProgramSchedule = () => {
                         className="w-full border px-2 py-1"
                         placeholder="0.00"
                       />
+                    ) : item.materialData != null ? (
+                      <span className="font-medium">
+                        ${Number(resolveMaterialUnitCost(item.materialData)).toFixed(2)}
+                      </span>
+                    ) : item.catalogData != null ? (
+                      <span className="font-medium">
+                        ${Number(item.catalogData.cost ?? item.cost ?? 0).toFixed(2)}
+                      </span>
                     ) : item.mixData != null ? (
                       <span className="font-medium">
                         ${Number(item.mixData.totalCostPerTank ?? item.cost ?? 0).toFixed(2)}
@@ -1736,7 +1903,7 @@ const CustomerAnnualProgramSchedule = () => {
                     )}
                   </td>
 
-                  {/* Price - editable for "Other", from mix for selected mix */}
+                  {/* Price - editable for "Other", from material, catalog or mix when selected */}
                   <td>
                     {item.treatment === "Other" ? (
                       <input
@@ -1750,6 +1917,25 @@ const CustomerAnnualProgramSchedule = () => {
                         className="w-full border px-2 py-1"
                         placeholder="0.00"
                       />
+                    ) : item.materialData != null ? (
+                      <span className="font-medium">
+                        ${Number(
+                          resolveMaterialUnitPrice(
+                            item.materialData,
+                            maintenanceEnabledNormalized
+                          )
+                        ).toFixed(2)}
+                      </span>
+                    ) : item.catalogData != null ? (
+                      <span className="font-medium">
+                        ${Number(
+                          maintenanceEnabledNormalized
+                            ? (item.catalogData.lowerPrice ??
+                                item.catalogData.price ??
+                                0)
+                            : (item.catalogData.price ?? 0)
+                        ).toFixed(2)}
+                      </span>
                     ) : item.mixData != null ? (
                       <span className="font-medium">
                         ${Number(item.mixData.totalPricePerTank ?? item.price ?? 0).toFixed(2)}

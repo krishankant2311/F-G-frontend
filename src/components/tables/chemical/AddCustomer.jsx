@@ -5,6 +5,20 @@ import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import { useTableContext } from "../../../context/TableContext";
 import { useNavigate } from "react-router-dom";
+import {
+  DEFAULT_ANNUAL_TREATMENTS,
+  mapApiTreatmentToAnnualRow,
+} from "../../../utils/otherTreatmentDefaults";
+import { getCustomLocalTreatments } from "../../../utils/otherTreatmentLocalStore";
+import {
+  buildOtherTreatmentDropdownOptions,
+  CATALOG_OPTION_PREFIX,
+  fetchActiveMaterials,
+  getOtherTreatmentSelectionKey,
+  MATERIAL_OPTION_PREFIX,
+  resolveMaterialUnitCost,
+  resolveMaterialUnitPrice,
+} from "../../../utils/otherTreatmentDropdown";
 
 const ADD_CUSTOMER_ERROR_TOAST_ID = "add-customer-error";
 const ADD_CUSTOMER_SUCCESS_TOAST_ID = "add-customer-success";
@@ -51,6 +65,8 @@ const INITIAL_TREATMENT_ROW = {
   date: "",
   dates: [],
   mixData: null,
+  catalogData: null,
+  materialData: null,
   treatmentName: "",
   price: "",
   cost: "",
@@ -162,59 +178,6 @@ function MiniCalendarWithQty({ selectedDate, onDateChange, qtyValue, onQtyChange
   );
 }
 
-const treatments = [
-  // Default annual program: price = higher, lowerPrice = lower (Chemical Maintenance Yes), cost unchanged for other APIs
-  {
-    name: "ROOT DRENCH (PER 100 GAL. TANK)",
-    qty: "",
-    price: 100, // higher price (when Chemical Maintenance = No)
-    lowerPrice: 70, // lower price (when Chemical Maintenance = Yes)
-    cost: 80,
-  },
-  {
-    name: "FUNGAL TREATMENT - LIQUID (PER 100 GAL. TANK)",
-    qty: "",
-    price: 100,
-    lowerPrice: 70,
-    cost: 80,
-  },
-  {
-    name: "FUNGAL TREATMENT (Headway G -BAG)",
-    qty: "",
-    price: 100,
-    lowerPrice: 70,
-    cost: 80,
-  },
-  {
-    name: "INSECTICIDE TREATMENT (PER 100G GAL.TANK)",
-    qty: "",
-    price: 100,
-    lowerPrice: 70,
-    cost: 80,
-  },
-  {
-    name: "OSMOCOTE FERTILIZER (PER 40LBS. BAG)",
-    qty: "",
-    price: 100,
-    lowerPrice: 70,
-    cost: 80,
-  },
-  {
-    name: "HERBICIDE (PER 2 GAL. BOTTLE)",
-    qty: "",
-    price: 100,
-    lowerPrice: 70,
-    cost: 80,
-  },
-  {
-    name: "TOP CHOICE -ANT CONTROL",
-    qty: "",
-    price: 100,
-    lowerPrice: 70,
-    cost: 80,
-  },
-];
-
 export default function AddCustomer() {
   const [rowQty, setRowQty] = useState({});
   // Annual program supports multiple schedule dates per treatment row
@@ -227,6 +190,9 @@ export default function AddCustomer() {
   const [treatmentRows, setTreatmentRows] = useState([{ ...INITIAL_TREATMENT_ROW }]);
 
   const [chemicalMixes, setChemicalMixes] = useState([]);
+  const [materials, setMaterials] = useState([]);
+  const [annualTreatments, setAnnualTreatments] = useState(DEFAULT_ANNUAL_TREATMENTS);
+  const [catalogTreatments, setCatalogTreatments] = useState([]);
   const [disableBtn, setDisableBtn] = useState(false);
   const navigate = useNavigate();
 
@@ -244,7 +210,67 @@ export default function AddCustomer() {
   useEffect(() => {
     window.scrollTo(0, 0);
     fetchChemicalMixes();
+    fetchTreatmentCatalog();
+    fetchMaterialsList();
   }, []);
+
+  const fetchMaterialsList = async () => {
+    try {
+      const token = localStorage.getItem("f&gstafftoken");
+      const items = await fetchActiveMaterials(
+        process.env.REACT_APP_API_BASE_URL,
+        token
+      );
+      setMaterials(items);
+    } catch (error) {
+      console.error("Failed to load materials:", error);
+    }
+  };
+
+  const fetchTreatmentCatalog = async () => {
+    try {
+      const token = localStorage.getItem("f&gstafftoken");
+      if (!token) return;
+
+      const res = await axios.get(
+        `${process.env.REACT_APP_API_BASE_URL}/chemical-maintenance/get-all-other-treatment`,
+        {
+          headers: { token },
+          params: { page: 1, limit: 500, sortby: "sortOrder", sortorder: 1 },
+        }
+      );
+
+      if (res.data.statusCode !== 200) return;
+
+      const items = res.data.result?.treatments || [];
+      const annual = items
+        .filter((t) => t.programType === "annual_program")
+        .map(mapApiTreatmentToAnnualRow);
+      const localOther = getCustomLocalTreatments().filter(
+        (t) => t.programType === "other"
+      );
+      const apiCatalog = items.filter((t) => t.programType === "other");
+      const seen = new Set(
+        apiCatalog.map((t) => String(t.treatmentName).trim().toUpperCase())
+      );
+      const catalog = [
+        ...apiCatalog,
+        ...localOther.filter(
+          (t) => !seen.has(String(t.treatmentName).trim().toUpperCase())
+        ),
+      ];
+
+      if (annual.length > 0) {
+        setAnnualTreatments(annual);
+      }
+      setCatalogTreatments(catalog);
+    } catch (error) {
+      console.error("Failed to load treatment catalog:", error);
+      setCatalogTreatments(
+        getCustomLocalTreatments().filter((t) => t.programType === "other")
+      );
+    }
+  };
 
   const handleCloseDateQtyPopup = () => {
     setOpenDateQtyIndex(null);
@@ -347,7 +373,7 @@ export default function AddCustomer() {
       }
 
       // Validate ANNUAL TREATMENTS - check if quantity is filled but date is missing
-      const incompleteAnnualTreatments = treatments.filter((t, index) => {
+      const incompleteAnnualTreatments = annualTreatments.filter((t, index) => {
         const quantity = toWholeQuantity(rowQty[index] || 0);
         const ds = Array.isArray(dates[index]) ? dates[index] : (dates[index] ? [dates[index]] : []);
         return quantity > 0 && ds.length === 0;
@@ -365,7 +391,7 @@ export default function AddCustomer() {
       }
 
       // Validate ANNUAL TREATMENTS - check if date is filled but quantity is empty
-      const dateWithoutQuantity = treatments.filter((t, index) => {
+      const dateWithoutQuantity = annualTreatments.filter((t, index) => {
         const quantity = toWholeQuantity(rowQty[index] || 0);
         const ds = Array.isArray(dates[index]) ? dates[index] : (dates[index] ? [dates[index]] : []);
         const hasDate = ds.length > 0;
@@ -449,7 +475,7 @@ export default function AddCustomer() {
       }
 
       // Build annual treatments payload: Yes = lower price, No = higher price; cost unchanged
-      const annualTreatments = treatments.map((t, index) => {
+      const annualTreatmentsPayload = annualTreatments.map((t, index) => {
         const quantity = toWholeQuantity(rowQty[index] || 0);
         const unitPrice = isChemicalChecked
           ? Number(t.lowerPrice ?? t.price ?? 100)
@@ -486,10 +512,23 @@ export default function AddCustomer() {
           return true;
         }
         
-        // For mix selections, remove duplicates
-        const firstIndex = self.findIndex((r) => 
-          r.treatment === row.treatment && r.treatment !== "Other"
-        );
+        const rowKey = row.materialData?._id
+          ? `material:${row.materialData._id}`
+          : row.catalogData?._id
+            ? `catalog:${row.catalogData._id}`
+            : row.mixData?._id
+              ? `mix:${row.mixData._id}`
+              : `name:${row.treatment}`;
+        const firstIndex = self.findIndex((r) => {
+          const k = r.materialData?._id
+            ? `material:${r.materialData._id}`
+            : r.catalogData?._id
+              ? `catalog:${r.catalogData._id}`
+              : r.mixData?._id
+                ? `mix:${r.mixData._id}`
+                : `name:${r.treatment}`;
+          return k === rowKey && r.treatment !== "Other";
+        });
         return index === firstIndex;
       });
 
@@ -526,8 +565,37 @@ export default function AddCustomer() {
             status: "Scheduled",
           };
 
+          if (row.catalogData) {
+            const pricePerTank = isChemicalChecked
+              ? (row.catalogData.lowerPrice ?? row.catalogData.price ?? 0)
+              : (row.catalogData.price ?? 0);
+            return uniqDates.map((d) => ({
+              ...baseData,
+              date: d,
+              treatment: row.catalogData.treatmentName,
+              totalCostPerTank: row.catalogData.cost || 0,
+              totalPricePerTank: pricePerTank,
+              treatmentCatalogId: row.catalogData._id,
+            }));
+          }
+
+          if (row.materialData) {
+            const unitCost = resolveMaterialUnitCost(row.materialData);
+            const pricePerTank = resolveMaterialUnitPrice(
+              row.materialData,
+              isChemicalChecked
+            );
+            return uniqDates.map((d) => ({
+              ...baseData,
+              date: d,
+              treatment: row.materialData.name,
+              totalCostPerTank: unitCost,
+              totalPricePerTank: pricePerTank,
+              materialId: row.materialData._id,
+            }));
+          }
+
           if (row.mixData) {
-            // Yes = lower price (totalCostPerTank), No = higher price (totalPricePerTank); cost unchanged
             const pricePerTank = isChemicalChecked
               ? (row.mixData.totalCostPerTank ?? 0)
               : (row.mixData.totalPricePerTank ?? 0);
@@ -552,7 +620,7 @@ export default function AddCustomer() {
         jobAddress: formData.markUp,
         contractTotal: toMoneyNumber(formData.contractTotal),
         isChemicalMaintenanceEnabled: isChemicalChecked,
-        annualTreatments,
+        annualTreatments: annualTreatmentsPayload,
         otherTreatments,
       };
 
@@ -610,7 +678,9 @@ export default function AddCustomer() {
         qty: 0,
         date: "",
         dates: [],
-        mixData: null, // Will store full mix data when treatment is selected
+        mixData: null,
+        catalogData: null,
+        materialData: null,
         treatmentName: "", // Custom name for "Other" option
         price: "", // For "Other" option
         cost: "", // For "Other" option
@@ -620,37 +690,85 @@ export default function AddCustomer() {
   const removeRow = (index) => {
     setTreatmentRows((prev) => prev.filter((_, i) => i !== index));
   };
+  const getTreatmentRowKey = getOtherTreatmentSelectionKey;
+
   const handleRowChange = (index, field, value) => {
-    // If changing treatment, check for duplicates and store full mix data
     if (field === "treatment" && value) {
-      // Allow multiple "Other" entries, but check duplicates for mix names
       if (value !== "Other") {
         const isDuplicate = treatmentRows.some(
-          (row, i) => i !== index && row.treatment === value
+          (row, i) => i !== index && getTreatmentRowKey(row) === value
         );
-        
+
         if (isDuplicate) {
-          toast.error("This treatment is already selected. Please choose a different treatment.");
+          toast.error(
+            "This treatment is already selected. Please choose a different treatment."
+          );
           return;
         }
       }
 
-      // Find the selected mix and store its full data (including cost & price)
-      const selectedMix = chemicalMixes.find((mix) => mix.mixName === value);
-      
       const updatedRows = [...treatmentRows];
-      updatedRows[index] = {
-        ...updatedRows[index],
-        treatment: value,
-        mixData: value === "Other" ? null : (selectedMix || null),
-        treatmentName: value === "Other" ? updatedRows[index].treatmentName : "",
-        // For mix: populate price/cost from mix; for "Other" keep existing
-        price: value === "Other" ? updatedRows[index].price : (selectedMix ? (selectedMix.totalPricePerTank ?? "") : ""),
-        cost: value === "Other" ? updatedRows[index].cost : (selectedMix ? (selectedMix.totalCostPerTank ?? "") : ""),
-        // Reset schedule when treatment changes
+      const baseReset = {
         date: "",
         dates: [],
+        treatmentName: value === "Other" ? updatedRows[index].treatmentName : "",
       };
+
+      if (value.startsWith(MATERIAL_OPTION_PREFIX)) {
+        const materialId = value.slice(MATERIAL_OPTION_PREFIX.length);
+        const materialItem = materials.find((m) => m._id === materialId);
+        updatedRows[index] = {
+          ...updatedRows[index],
+          ...baseReset,
+          treatment: materialItem?.name || "",
+          mixData: null,
+          catalogData: null,
+          materialData: materialItem || null,
+          price: materialItem
+            ? resolveMaterialUnitPrice(materialItem, isChemicalChecked)
+            : "",
+          cost: materialItem ? resolveMaterialUnitCost(materialItem) : "",
+        };
+      } else if (value.startsWith(CATALOG_OPTION_PREFIX)) {
+        const catalogId = value.slice(CATALOG_OPTION_PREFIX.length);
+        const catalogItem = catalogTreatments.find((c) => c._id === catalogId);
+        updatedRows[index] = {
+          ...updatedRows[index],
+          ...baseReset,
+          treatment: catalogItem?.treatmentName || "",
+          mixData: null,
+          catalogData: catalogItem || null,
+          materialData: null,
+          price: catalogItem
+            ? isChemicalChecked
+              ? catalogItem.lowerPrice ?? catalogItem.price ?? ""
+              : catalogItem.price ?? ""
+            : "",
+          cost: catalogItem?.cost ?? "",
+        };
+      } else if (value === "Other") {
+        updatedRows[index] = {
+          ...updatedRows[index],
+          ...baseReset,
+          treatment: "Other",
+          mixData: null,
+          catalogData: null,
+          materialData: null,
+        };
+      } else {
+        const selectedMix = chemicalMixes.find((mix) => mix.mixName === value);
+        updatedRows[index] = {
+          ...updatedRows[index],
+          ...baseReset,
+          treatment: value,
+          mixData: selectedMix || null,
+          catalogData: null,
+          materialData: null,
+          price: selectedMix ? selectedMix.totalPricePerTank ?? "" : "",
+          cost: selectedMix ? selectedMix.totalCostPerTank ?? "" : "",
+        };
+      }
+
       setTreatmentRows(updatedRows);
       return;
     }
@@ -814,7 +932,7 @@ export default function AddCustomer() {
                     </tr>
                   </thead>
                   <tbody>
-                    {treatments.map((t, i) => (
+                    {annualTreatments.map((t, i) => (
                       <tr key={i} className="text-center">
                         <td className="border p-2 text-left">{t.name}</td>
                         
@@ -985,23 +1103,21 @@ export default function AddCustomer() {
 
                   <tbody>
                     {treatmentRows.map((row, index) => {
-                      // Filter out already selected treatments (except current row's treatment)
-                      const availableMixes = chemicalMixes.filter((mix) => {
-                        const isSelectedInOtherRow = treatmentRows.some(
-                          (r, i) => i !== index && r.treatment === mix.mixName
+                      const isKeyTakenElsewhere = (key) =>
+                        key &&
+                        treatmentRows.some(
+                          (r, i) => i !== index && getTreatmentRowKey(r) === key
                         );
-                        return !isSelectedInOtherRow;
+
+                      const dropdownOptions = buildOtherTreatmentDropdownOptions({
+                        chemicalMixes,
+                        materials,
+                        isKeyTaken: isKeyTakenElsewhere,
                       });
 
-                      // Check if there are any unselected treatments available for adding new row
-                      // "Other" entries don't count against the limit - we can always add more "Other" entries
-                      const selectedMixTreatments = treatmentRows
-                        .map((r) => r.treatment)
-                        .filter((t) => t && t.trim() !== "" && t !== "Other");
-                      // Allow adding new row if there are unselected mixes OR if we want to add another "Other"
-                      const hasUnselectedTreatments =
-                        selectedMixTreatments.length < chemicalMixes.length;
-                      const canAddMoreRows = hasUnselectedTreatments || true; // Always allow adding "Other" entries
+                      const selectedTreatmentValue = getOtherTreatmentSelectionKey(row);
+
+                      const canAddMoreRows = true;
 
                       return (
                         <tr key={index}>
@@ -1019,7 +1135,7 @@ export default function AddCustomer() {
                               />
                             ) : (
                               <select
-                                value={row.treatment}
+                                value={selectedTreatmentValue}
                                 onChange={(e) =>
                                   handleRowChange(
                                     index,
@@ -1029,10 +1145,10 @@ export default function AddCustomer() {
                                 }
                                 className="w-full border px-2 py-1"
                               >
-                                <option value="">Select a Treatment</option>
-                                {availableMixes.map((mix) => (
-                                  <option key={mix._id} value={mix.mixName}>
-                                    {mix.mixName}
+                                <option value="">Select Treatment</option>
+                                {dropdownOptions.map((opt) => (
+                                  <option key={opt.key} value={opt.key}>
+                                    {opt.label}
                                   </option>
                                 ))}
                                 <option value="Other">Other</option>
@@ -1125,7 +1241,7 @@ export default function AddCustomer() {
                           )}
                         </td>
 
-                        {/* Price - Yes = lower (totalCostPerTank), No = higher (totalPricePerTank) */}
+                        {/* Price - Yes = lower price, No = higher price */}
                         <td>
                           {row.treatment === "Other" ? (
                             <input
@@ -1139,6 +1255,25 @@ export default function AddCustomer() {
                               className="w-full border px-2 py-1"
                               placeholder="0.00"
                             />
+                          ) : row.materialData != null ? (
+                            <span className="font-medium">
+                              ${Number(
+                                resolveMaterialUnitPrice(
+                                  row.materialData,
+                                  isChemicalChecked
+                                )
+                              ).toFixed(2)}
+                            </span>
+                          ) : row.catalogData != null ? (
+                            <span className="font-medium">
+                              ${Number(
+                                isChemicalChecked
+                                  ? (row.catalogData.lowerPrice ??
+                                      row.catalogData.price ??
+                                      0)
+                                  : (row.catalogData.price ?? 0)
+                              ).toFixed(2)}
+                            </span>
                           ) : row.mixData != null ? (
                             <span className="font-medium">
                               ${Number(
@@ -1152,7 +1287,7 @@ export default function AddCustomer() {
                           )}
                         </td>
 
-                        {/* Cost - editable for "Other", from mix for selected mix */}
+                        {/* Cost - editable for "Other", from catalog or mix when selected */}
                         <td>
                           {row.treatment === "Other" ? (
                             <input
@@ -1166,6 +1301,16 @@ export default function AddCustomer() {
                               className="w-full border px-2 py-1"
                               placeholder="0.00"
                             />
+                          ) : row.materialData != null ? (
+                            <span className="font-medium">
+                              ${Number(
+                                resolveMaterialUnitCost(row.materialData)
+                              ).toFixed(2)}
+                            </span>
+                          ) : row.catalogData != null ? (
+                            <span className="font-medium">
+                              ${Number(row.catalogData.cost ?? row.cost ?? 0).toFixed(2)}
+                            </span>
                           ) : row.mixData != null ? (
                             <span className="font-medium">
                               ${Number(row.mixData.totalCostPerTank ?? row.cost ?? 0).toFixed(2)}
