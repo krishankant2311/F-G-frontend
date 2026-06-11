@@ -7,7 +7,7 @@ import { useTableContext } from "../../../context/TableContext";
 import { useNavigate } from "react-router-dom";
 import {
   DEFAULT_ANNUAL_TREATMENTS,
-  mapApiTreatmentToAnnualRow,
+  buildAnnualTreatmentsFromCatalog,
 } from "../../../utils/otherTreatmentDefaults";
 import { getCustomLocalTreatments } from "../../../utils/otherTreatmentLocalStore";
 import {
@@ -191,7 +191,8 @@ export default function AddCustomer() {
 
   const [chemicalMixes, setChemicalMixes] = useState([]);
   const [materials, setMaterials] = useState([]);
-  const [annualTreatments, setAnnualTreatments] = useState(DEFAULT_ANNUAL_TREATMENTS);
+  const [annualTreatments, setAnnualTreatments] = useState([]);
+  const [annualCatalogLoading, setAnnualCatalogLoading] = useState(true);
   const [catalogTreatments, setCatalogTreatments] = useState([]);
   const [disableBtn, setDisableBtn] = useState(false);
   const navigate = useNavigate();
@@ -228,47 +229,87 @@ export default function AddCustomer() {
   };
 
   const fetchTreatmentCatalog = async () => {
+    setAnnualCatalogLoading(true);
+    const localItems = getCustomLocalTreatments();
+
     try {
       const token = localStorage.getItem("f&gstafftoken");
-      if (!token) return;
+      if (!token) {
+        const localAnnual = buildAnnualTreatmentsFromCatalog([], localItems);
+        setAnnualTreatments(
+          localAnnual.length > 0 ? localAnnual : DEFAULT_ANNUAL_TREATMENTS
+        );
+        setCatalogTreatments(localItems.filter((t) => t.programType === "other"));
+        toast.error("Please log in again to load treatments from server", {
+          toastId: ADD_CUSTOMER_ERROR_TOAST_ID,
+        });
+        return;
+      }
 
-      const res = await axios.get(
+      const catalogParams = {
+        page: 1,
+        limit: 500,
+        sortby: "sortOrder",
+        sortorder: 1,
+      };
+
+      let res = await axios.get(
         `${process.env.REACT_APP_API_BASE_URL}/chemical-maintenance/get-all-other-treatment`,
-        {
-          headers: { token },
-          params: { page: 1, limit: 500, sortby: "sortOrder", sortorder: 1 },
+        { headers: { token }, params: catalogParams }
+      );
+
+      if (res.data.statusCode !== 200) {
+        throw new Error(res.data.message || "Failed to load treatment catalog");
+      }
+
+      let items = res.data.result?.treatments || [];
+      if ((res.data.result?.totalRecords || 0) === 0) {
+        try {
+          await axios.post(
+            `${process.env.REACT_APP_API_BASE_URL}/chemical-maintenance/seed-other-treatments`,
+            {},
+            { headers: { token } }
+          );
+          res = await axios.get(
+            `${process.env.REACT_APP_API_BASE_URL}/chemical-maintenance/get-all-other-treatment`,
+            { headers: { token }, params: catalogParams }
+          );
+          items = res.data.result?.treatments || [];
+        } catch (seedError) {
+          console.error("Seed other treatments failed:", seedError);
         }
+      }
+
+      const annual = buildAnnualTreatmentsFromCatalog(items, localItems);
+      setAnnualTreatments(
+        annual.length > 0 ? annual : DEFAULT_ANNUAL_TREATMENTS
       );
 
-      if (res.data.statusCode !== 200) return;
-
-      const items = res.data.result?.treatments || [];
-      const annual = items
-        .filter((t) => t.programType === "annual_program")
-        .map(mapApiTreatmentToAnnualRow);
-      const localOther = getCustomLocalTreatments().filter(
-        (t) => t.programType === "other"
-      );
+      const localOther = localItems.filter((t) => t.programType === "other");
       const apiCatalog = items.filter((t) => t.programType === "other");
       const seen = new Set(
         apiCatalog.map((t) => String(t.treatmentName).trim().toUpperCase())
       );
-      const catalog = [
+      setCatalogTreatments([
         ...apiCatalog,
         ...localOther.filter(
           (t) => !seen.has(String(t.treatmentName).trim().toUpperCase())
         ),
-      ];
-
-      if (annual.length > 0) {
-        setAnnualTreatments(annual);
-      }
-      setCatalogTreatments(catalog);
+      ]);
     } catch (error) {
       console.error("Failed to load treatment catalog:", error);
-      setCatalogTreatments(
-        getCustomLocalTreatments().filter((t) => t.programType === "other")
+      const localAnnual = buildAnnualTreatmentsFromCatalog([], localItems);
+      setAnnualTreatments(
+        localAnnual.length > 0 ? localAnnual : DEFAULT_ANNUAL_TREATMENTS
       );
+      setCatalogTreatments(localItems.filter((t) => t.programType === "other"));
+      toast.error(
+        error.response?.data?.message ||
+          "Could not load treatments from server — showing saved defaults",
+        { toastId: ADD_CUSTOMER_ERROR_TOAST_ID }
+      );
+    } finally {
+      setAnnualCatalogLoading(false);
     }
   };
 
@@ -932,6 +973,13 @@ export default function AddCustomer() {
                     </tr>
                   </thead>
                   <tbody>
+                    {annualCatalogLoading && annualTreatments.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="border p-4 text-center text-gray-500">
+                          Loading treatments from catalog…
+                        </td>
+                      </tr>
+                    )}
                     {annualTreatments.map((t, i) => (
                       <tr key={i} className="text-center">
                         <td className="border p-2 text-left">{t.name}</td>

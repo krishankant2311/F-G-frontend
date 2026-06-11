@@ -58,8 +58,52 @@ export function mapApiTreatmentToAnnualRow(item) {
     price: Number(item.price) || 0,
     lowerPrice: Number(item.lowerPrice) || 0,
     cost: Number(item.cost) || 0,
+    sortOrder: Number(item.sortOrder) || 0,
     _id: item._id,
   };
+}
+
+/** Annual program rows from API + browser-stored catalog (deduped, sorted). */
+export function buildAnnualTreatmentsFromCatalog(apiItems = [], localItems = []) {
+  const norm = (s) => String(s || "").trim().toUpperCase();
+  const seen = new Set();
+  const rows = [];
+
+  const apiAnnual = (apiItems || [])
+    .filter((t) => t.programType === "annual_program")
+    .sort(
+      (a, b) =>
+        (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0) ||
+        String(a.treatmentName || "").localeCompare(String(b.treatmentName || ""))
+    );
+
+  for (const item of apiAnnual) {
+    const name = String(item.treatmentName || "").trim();
+    if (!name) continue;
+    const key = norm(name);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push(mapApiTreatmentToAnnualRow(item));
+  }
+
+  const localAnnual = (localItems || [])
+    .filter((t) => t.programType === "annual_program")
+    .sort(
+      (a, b) =>
+        (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0) ||
+        String(a.treatmentName || "").localeCompare(String(b.treatmentName || ""))
+    );
+
+  for (const item of localAnnual) {
+    const name = String(item.treatmentName || "").trim();
+    if (!name) continue;
+    const key = norm(name);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push(mapApiTreatmentToAnnualRow(item));
+  }
+
+  return rows;
 }
 
 export function formatProgramTypeLabel(programType) {
