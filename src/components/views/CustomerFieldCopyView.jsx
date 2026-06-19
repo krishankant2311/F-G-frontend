@@ -1397,8 +1397,9 @@ Approved by: __________________  Date: ____________________`,
         String(item.reference || ""),
         item.vendorName
       ).trim();
-      const key = baseMaterialName.toUpperCase();
-      if (!key) return;
+      const materialKey = baseMaterialName.toUpperCase();
+      if (!materialKey) return;
+      const key = `${String(item.source || "").trim()}-${materialKey}`;
 
       const qty = num(item.quantity);
       const unitPrice = num(item.price);

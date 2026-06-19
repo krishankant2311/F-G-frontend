@@ -20,6 +20,11 @@ import {
   recalcOtherFieldCopyLine,
   toPersistedCopy,
 } from "../../../utils/materialReference";
+import {
+  extractMaterialRows,
+  replaceMaterialRowsInForms,
+} from "../../../utils/customerCopyMaterialMerge";
+import CustomerSalesOrderPreviewModal from "./CustomerSalesOrderPreviewModal";
 
 export default function EditCustomerFieldCopy() {
   const [formData, setFormData] = useState({
@@ -64,6 +69,7 @@ export default function EditCustomerFieldCopy() {
   const [laborData, setLaborData] = useState([]);
   const [adminTax, setAdminTax] = useState(0);
   const [address, setAddress] = useState("");
+  const [showSalesOrderPreview, setShowSalesOrderPreview] = useState(false);
   const { id } = useParams();
   const navigate = useNavigate();
 
@@ -255,10 +261,52 @@ export default function EditCustomerFieldCopy() {
   
     return Object.values(compiled);
   };
-  
-  
 
-  // const groupByType = (compiledData, laborData) => {
+  /** Green Generate Customer Copy only — keep F&G vs Other rows separate. */
+  const compileFormDataPreserveSource = (forms) => {
+    const compiled = {};
+
+    forms.forEach((form) => {
+      const row =
+        form.source === "Labor"
+          ? recalcLaborGenerateCustomerLine(form)
+          : form;
+      const persisted = toPersistedCopy(row);
+      const {
+        reference,
+        quantity,
+        totalPrice,
+        type,
+        cost,
+        markUp,
+        markup,
+        source,
+      } = persisted;
+
+      const finalMarkUp =
+        markUp !== undefined && markUp !== null && markUp !== ""
+          ? Number(markUp)
+          : Number(markup) || 0;
+
+      const finalCost = Number(cost) || 0;
+      const key = `${source}-${type}-${reference}`;
+
+      if (compiled[key]) {
+        compiled[key].quantity += Number(quantity) || 0;
+        compiled[key].totalPrice += Number(totalPrice) || 0;
+      } else {
+        compiled[key] = {
+          ...persisted,
+          quantity: Number(quantity) || 0,
+          totalPrice: Number(totalPrice) || 0,
+          cost: finalCost,
+          markUp: finalMarkUp,
+        };
+      }
+    });
+
+    return Object.values(compiled);
+  };
   //   const groupedData = compiledData.reduce((acc, item) => {
   //     const { type, ...copyData } = item;
 
@@ -610,46 +658,55 @@ export default function EditCustomerFieldCopy() {
       updatedForm.price = normalizeFgEditableUnitValue(value);
     }
 
-    // Lump Sum only: reverse markup from cost + totalPrice
-    if (
-      (name === "cost" || name === "totalPrice") &&
-      updatedForm.source === "Lump Sum"
-    ) {
-      const cost = parseFloat(updatedForm.cost) || 0;
-      const totalPriceVal = parseFloat(updatedForm.totalPrice) || 0;
-      if (cost > 0 && totalPriceVal > 0) {
-        const autoMarkup = ((totalPriceVal - cost) / cost) * 100;
-        updatedForm.markup = Math.round(autoMarkup * 100) / 100;
-        updatedForm.markUp = updatedForm.markup;
-      }
-    }
-
-    // if(name === "vendorName"){
-    //   if(containsNumberOrSpecialChar(e.target.value)){
-    //     toast.error("Vendor name cannot contain numbers or special characters.");
-    //     return;
-    //   }
-    // }
-
-    // if(name === "reference"){
-    //   if(containsNumberOrSpecialChar(e.target.value)){
-    //     toast.error("Material name cannot contain numbers or special characters.");
-    //     return;
-    //   }
-    // }
-
-    // if(name === "measure"){
-    //   if(containsNumberOrSpecialChar(e.target.value)){
-    //     toast.error("Measure cannot contain numbers or special characters.");
-    //     return;
-    //   }
-    // }
-
+    // Lump Sum: cost + markup → totalPrice; edit totalPrice → markup adjusts
     if (updatedForm.source === "Lump Sum") {
       const cost = parseFloat(updatedForm.cost) || 0;
-      const markupPercent = parseFloat(updatedForm.markUp) || 0;
       updatedForm.totalCost = cost;
-      updatedForm.totalPrice = cost + (cost * markupPercent) / 100;
+
+      if (name === "cost") {
+        if (value === "" || value === null || value === undefined) {
+          updatedForm.totalPrice = "";
+        } else {
+          const c = parseFloat(value);
+          if (!Number.isNaN(c) && c >= 0) {
+            const markupPct =
+              parseFloat(updatedForm.markUp ?? updatedForm.markup) || 0;
+            updatedForm.totalCost = c;
+            updatedForm.totalPrice =
+              c > 0
+                ? Math.round((c + (c * markupPct) / 100) * 100) / 100
+                : "";
+          }
+        }
+      } else if (name === "totalPrice") {
+        if (value === "" || value === null || value === undefined) {
+          updatedForm.cost = "";
+          updatedForm.totalCost = "";
+        } else {
+          const tp = parseFloat(value);
+          if (!Number.isNaN(tp) && tp >= 0) {
+            const c = parseFloat(updatedForm.cost) || 0;
+            if (c > 0) {
+              const markup = tp > 0 ? ((tp - c) / c) * 100 : 0;
+              updatedForm.markup = Math.round(markup * 100) / 100;
+              updatedForm.markUp = updatedForm.markup;
+            } else if (tp > 0) {
+              const markupPct =
+                parseFloat(updatedForm.markUp ?? updatedForm.markup);
+              const useMarkup =
+                Number.isFinite(markupPct) && markupPct >= 0
+                  ? markupPct
+                  : 100;
+              const derivedCost =
+                Math.round((tp / (1 + useMarkup / 100)) * 10000) / 10000;
+              updatedForm.cost = derivedCost;
+              updatedForm.totalCost = derivedCost;
+              updatedForm.markup = useMarkup;
+              updatedForm.markUp = useMarkup;
+            }
+          }
+        }
+      }
     } else if (updatedForm.source === "Labor") {
       Object.assign(
         updatedForm,
@@ -709,6 +766,13 @@ export default function EditCustomerFieldCopy() {
           updatedForm,
           recalcLaborGenerateCustomerLine(updatedForm)
         );
+      } else if (updatedForm.source === "Lump Sum") {
+        const cost = parseFloat(updatedForm.cost) || 0;
+        updatedForm.totalCost = cost;
+        updatedForm.totalPrice =
+          cost > 0
+            ? Math.round((cost + (cost * markupVal) / 100) * 100) / 100
+            : "";
       } else if (false) {
         const intermediatePrice =
           updatedForm.totalCost + (markupVal * updatedForm.totalCost) / 100;
@@ -946,36 +1010,16 @@ export default function EditCustomerFieldCopy() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const updatedForms = compileFormData(forms);
+    await runGenerateCustomerCopy(forms, compileFormDataPreserveSource);
+  };
+
+  const runGenerateCustomerCopy = async (
+    sourceForms,
+    compileFn = compileFormData
+  ) => {
+    const updatedForms = compileFn(sourceForms);
     const groupedForms = groupByType(updatedForms, laborData);
-    // console.log("Grouped Form", groupedForms);
     try {
-      // Validate endTime > startTime for each form entry
-      //   const isValid = forms.every((formData) => {
-      //     const startTime = new Date(`1970-01-01T${formData.startDate}`);
-      //     const endTime = new Date(`1970-01-01T${formData.endDate}`);
-      //     return endTime > startTime;
-      //   });
-
-      //   if (!isValid) {
-      //     toast.error(
-      //       "End time must be greater than start time for all entries."
-      //     );
-      //     return;
-      //   }
-
-      let isValidPrice = forms.some((form) => {
-        return (
-          Number.parseFloat(form.price) * Number.parseFloat(form.quantity) !==
-          Number.parseFloat(form.totalPrice) && form.source === "F&G"
-        );
-      });
-
-      // if (isValidPrice) {
-      //   toast.error("Please ensure all field copies have valid prices.");
-      //   return;
-      // }
-
       const token = localStorage.getItem("f&gstafftoken");
       const headers = {
         token: token,
@@ -984,12 +1028,9 @@ export default function EditCustomerFieldCopy() {
 
       const formdata = new FormData();
 
-      // console.log("Grouped Forms", groupedForms);
-
       if (groupedForms.length === 0) {
         toast.error("Please add some data.");
-        setDisableBtn(false);
-        return;
+        return false;
       }
 
       formdata.append("forms", JSON.stringify(groupedForms));
@@ -1005,15 +1046,17 @@ export default function EditCustomerFieldCopy() {
       if (response.data.statusCode === 201) {
         toast.success(response.data.message);
         navigate(-1);
+        return true;
       } else {
         toast.error(response.data.message);
+        return false;
       }
-
-      // navigate(`/panel/office/project/view/${id}`);
     } catch (error) {
       toast.error(error.response.message);
+      return false;
+    } finally {
+      setDisableBtn(false);
     }
-    setDisableBtn(false);
   };
 
   const [dropdownVisibility, setDropdownVisibility] = useState(
@@ -1043,6 +1086,7 @@ export default function EditCustomerFieldCopy() {
 
   useEffect(() => {
     const handleOutsideClick = (event) => {
+      if (showSalesOrderPreview) return;
       // Check if the clicked element is not inside any of the dropdowns
       if (
         dropdownRefs.current.every((ref) => ref && !ref.contains(event.target))
@@ -1056,11 +1100,19 @@ export default function EditCustomerFieldCopy() {
     return () => {
       document.removeEventListener("mousedown", handleOutsideClick);
     };
-  }, [forms]); // No need to include dropdownVisibility in the dependency array
+  }, [forms, showSalesOrderPreview]);
 
   // Handle search term change
   const handleSearchChange = (e) => {
     setSearchTerm(e.target.value);
+  };
+
+  const handleGenerateMergeCopy = async (previewMaterialRows) => {
+    const mergedForms = replaceMaterialRowsInForms(forms, previewMaterialRows);
+    const ok = await runGenerateCustomerCopy(mergedForms);
+    if (ok) {
+      setShowSalesOrderPreview(false);
+    }
   };
 
   return (
@@ -1723,6 +1775,7 @@ export default function EditCustomerFieldCopy() {
                               id={`quantity-${index}`}
                               name="quantity"
                               onChange={(e) => handleInputChange(e, index)}
+                              onWheel={(e) => e.currentTarget.blur()}
                               value={formData.quantity}
                               placeholder="Enter Quantity"
                               min={0}
@@ -2022,7 +2075,14 @@ export default function EditCustomerFieldCopy() {
                       })}
                   </div>
                 </div>
-                <div className="card-footer">
+                <div className="card-footer flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    className="btn bg-[#1e3a8a] text-white"
+                    onClick={() => setShowSalesOrderPreview(true)}
+                  >
+                    Merge Duplicate Materials
+                  </button>
                   <button
                     type="submit"
                     className="btn bg-[#00613e] text-white"
@@ -2036,6 +2096,13 @@ export default function EditCustomerFieldCopy() {
           </div>
         </div>
       </div>
+      <CustomerSalesOrderPreviewModal
+        show={showSalesOrderPreview}
+        materialRows={extractMaterialRows(forms)}
+        onClose={() => setShowSalesOrderPreview(false)}
+        onGenerateMergeCopy={handleGenerateMergeCopy}
+        isGenerating={disableBtn}
+      />
     </Layout>
   );
 }
