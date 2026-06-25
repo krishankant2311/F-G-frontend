@@ -113,19 +113,34 @@ const CustomerClientReconcile = () => {
       return sum + (qty * pricePerTank);
     }, 0);
 
-  const usedAmount = completedAnnualAmount + completedOtherAmount;
-
   const contractTotalRaw = customerData?.contractTotal ?? state?.contractTotal;
   const contractTotalAmount =
     contractTotalRaw === undefined || contractTotalRaw === null || contractTotalRaw === ""
       ? 0
       : money2(contractTotalRaw);
 
+  const usedAmount = (() => {
+    const calculatedUsedAmount = completedAnnualAmount + completedOtherAmount;
+    const storedUsedAmount = Number(customerData?.materialsUsedToDate);
+    return money2(
+      contractTotalAmount > 0
+        ? Math.max(
+            Number.isFinite(storedUsedAmount) ? storedUsedAmount : 0,
+            calculatedUsedAmount
+          )
+        : calculatedUsedAmount > 0
+          ? calculatedUsedAmount
+          : Number.isFinite(storedUsedAmount)
+            ? storedUsedAmount
+            : 0
+    );
+  })();
+
   // CONTRACT TOTAL − MATERIALS USED when contract is set (>0); else legacy: PROGRAM − MATERIALS
   const remainingAmount =
     contractTotalAmount > 0
-      ? money2(contractTotalAmount - money2(usedAmount))
-      : money2(money2(annualProgramTotal) - money2(usedAmount));
+      ? money2(contractTotalAmount - usedAmount)
+      : money2(money2(annualProgramTotal) - usedAmount);
 
   const isLowBalance = remainingAmount < 50;
 

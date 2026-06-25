@@ -81,21 +81,6 @@ const EditCustomerModal = ({ show, onClose, customer, onSuccess }) => {
       saveLockRef.current = false;
       return;
     }
-    if (!emailTrim) {
-      toast.error("Customer email is required", { toastId: EDIT_CUSTOMER_TOAST_ID });
-      saveLockRef.current = false;
-      return;
-    }
-    if (!phoneTrim) {
-      toast.error("Customer phone is required", { toastId: EDIT_CUSTOMER_TOAST_ID });
-      saveLockRef.current = false;
-      return;
-    }
-    if (!jobTrim) {
-      toast.error("Job address is required", { toastId: EDIT_CUSTOMER_TOAST_ID });
-      saveLockRef.current = false;
-      return;
-    }
 
     try {
       setLoading(true);
@@ -108,10 +93,10 @@ const EditCustomerModal = ({ show, onClose, customer, onSuccess }) => {
       }
 
       const payload = {
-        customerName: formData.customerName,
-        customerEmail: formData.customerEmail,
-        customerPhone: formData.customerPhone,
-        jobAddress: formData.jobAddress,
+        customerName: nameTrim,
+        customerEmail: emailTrim,
+        customerPhone: phoneTrim,
+        jobAddress: jobTrim,
         contractTotal:
           formData.contractTotal === "" || formData.contractTotal === null || !Number.isFinite(contractTotalNum)
             ? 0
@@ -227,7 +212,6 @@ const EditCustomerModal = ({ show, onClose, customer, onSuccess }) => {
                 value={formData.customerName}
                 onChange={handleChange}
                 className="w-full border border-gray-300 bg-gray-50 px-3 py-2 rounded"
-                required
               />
             </div>
 
@@ -240,7 +224,6 @@ const EditCustomerModal = ({ show, onClose, customer, onSuccess }) => {
                 value={formData.customerEmail}
                 onChange={handleChange}
                 className="w-full border border-gray-300 bg-gray-50 px-3 py-2 rounded"
-                required
               />
             </div>
 
@@ -253,7 +236,6 @@ const EditCustomerModal = ({ show, onClose, customer, onSuccess }) => {
                 value={formData.customerPhone}
                 onChange={handleChange}
                 className="w-full border border-gray-300 bg-gray-50 px-3 py-2 rounded"
-                required
               />
             </div>
 
@@ -293,7 +275,6 @@ const EditCustomerModal = ({ show, onClose, customer, onSuccess }) => {
                 value={formData.jobAddress}
                 onChange={handleChange}
                 className="w-full border border-gray-300 bg-gray-50 px-3 py-2 rounded"
-                required
               />
             </div>
           </div>

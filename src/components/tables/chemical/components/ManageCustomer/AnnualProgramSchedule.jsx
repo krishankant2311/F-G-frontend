@@ -448,6 +448,7 @@ const CustomerAnnualProgramSchedule = () => {
         price: qty * pricePerTank,
         cost: qty * costPerTank,
         unitPrice: pricePerTank,
+        unitCost: costPerTank,
         projectCode: ot.projectCode || "",
         type: "other",
         originalIndex: index,
@@ -455,6 +456,32 @@ const CustomerAnnualProgramSchedule = () => {
     });
 
   // Build schedule data from OTHER TREATMENTS section (newly added in this page)
+  const resolveOtherFormRowPricing = (ot) => {
+    if (ot?.materialData) {
+      const unitCost = resolveMaterialUnitCost(ot.materialData);
+      const unitPrice = resolveMaterialUnitPrice(
+        ot.materialData,
+        maintenanceEnabledNormalized
+      );
+      return { unitCost, unitPrice, costPerTank: unitCost, pricePerTank: unitPrice };
+    }
+    if (ot?.catalogData) {
+      const costPerTank = Number(ot.catalogData.cost || 0);
+      const pricePerTank = maintenanceEnabledNormalized
+        ? Number(ot.catalogData.lowerPrice ?? ot.catalogData.price ?? 0)
+        : Number(ot.catalogData.price ?? 0);
+      return { unitCost: costPerTank, unitPrice: pricePerTank, costPerTank, pricePerTank };
+    }
+    if (ot?.mixData) {
+      const costPerTank = Number(ot.mixData.totalCostPerTank || 0);
+      const pricePerTank = Number(ot.mixData.totalPricePerTank || 0);
+      return { unitCost: costPerTank, unitPrice: pricePerTank, costPerTank, pricePerTank };
+    }
+    const costPerTank = Number(ot?.cost) || 0;
+    const pricePerTank = Number(ot?.price) || 0;
+    return { unitCost: costPerTank, unitPrice: pricePerTank, costPerTank, pricePerTank };
+  };
+
   const otherScheduleDataFromForm = newOtherTreatments
     .filter((ot) => {
       const ds = Array.isArray(ot.scheduledDates)
@@ -464,8 +491,7 @@ const CustomerAnnualProgramSchedule = () => {
     })
     .flatMap((ot, index) => {
       const qty = wholeQuantity(ot.quantity || 0);
-      const costPerTank = Number(ot.mixData?.totalCostPerTank || 0);
-      const pricePerTank = Number(ot.mixData?.totalPricePerTank || 0);
+      const { costPerTank, pricePerTank, unitCost } = resolveOtherFormRowPricing(ot);
       const ds = Array.isArray(ot.scheduledDates)
         ? ot.scheduledDates
         : (ot.scheduledDate ? [ot.scheduledDate] : []);
@@ -478,6 +504,7 @@ const CustomerAnnualProgramSchedule = () => {
         price: qty * pricePerTank,
         cost: qty * costPerTank,
         unitPrice: pricePerTank,
+        unitCost,
         projectCode: "",
         type: "other-new",
         originalIndex: index,
@@ -1635,9 +1662,11 @@ const CustomerAnnualProgramSchedule = () => {
 
           <tbody>
             {newOtherTreatments.map((item, index) => {
-              const scheduledTreatmentNames = scheduledTreatments.map(
-                (st) => st.treatment
-              );
+              // Rows still being edited below are also previewed in the main table as
+              // type "other-new" — don't treat those as taken or the select goes blank.
+              const scheduledTreatmentNames = scheduledTreatments
+                .filter((st) => st.type !== "other-new")
+                .map((st) => st.treatment);
 
               const isKeyTakenElsewhere = (key) => {
                 if (!key) return false;

@@ -56,7 +56,14 @@ function buildTreatmentsForCustomer(customer) {
       treatment: t.treatment || "-",
       quantity: t.qty ?? "-",
       status: computeStatus(t.status, t.date),
-      price: t.totalPricePerTank != null ? String(t.totalPricePerTank) : "-",
+      price:
+        t.totalPricePerTank != null
+          ? String(
+              (
+                Number(t.qty || 0) * Number(t.totalPricePerTank)
+              ).toFixed(2)
+            )
+          : "-",
       projectCode: "-",
     });
   });
@@ -114,7 +121,14 @@ export function buildCustomerWithTreatments(customer) {
       treatment: t.treatment || "-",
       quantity: t.qty ?? "-",
       status: computeStatus(t.status, t.date),
-      price: t.totalPricePerTank != null ? String(t.totalPricePerTank) : "-",
+      price:
+        t.totalPricePerTank != null
+          ? String(
+              (
+                Number(t.qty || 0) * Number(t.totalPricePerTank)
+              ).toFixed(2)
+            )
+          : "-",
       projectCode: t.projectCode ?? "",
       type: "other",
       originalIndex: index,
