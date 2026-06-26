@@ -11,14 +11,18 @@ import {
 } from "../../../utils/otherTreatmentDefaults";
 import { getCustomLocalTreatments } from "../../../utils/otherTreatmentLocalStore";
 import {
-  buildOtherTreatmentDropdownOptions,
   CATALOG_OPTION_PREFIX,
   fetchActiveMaterials,
   getOtherTreatmentSelectionKey,
   MATERIAL_OPTION_PREFIX,
-  resolveMaterialUnitCost,
-  resolveMaterialUnitPrice,
 } from "../../../utils/otherTreatmentDropdown";
+import {
+  EMPTY_OTHER_TREATMENT_ROW,
+  applyOtherTreatmentSelection,
+  buildChemicalOtherTreatmentDropdownOptions,
+  buildMaterialOtherTreatmentDropdownOptions,
+  formatOtherTreatmentRowsForApi,
+} from "../../../utils/otherTreatmentCategory";
 
 const ADD_CUSTOMER_ERROR_TOAST_ID = "add-customer-error";
 const ADD_CUSTOMER_SUCCESS_TOAST_ID = "add-customer-success";
@@ -29,16 +33,16 @@ const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 const normalizeQuantityInput = (val) => {
   if (val === "" || val == null) return "";
-  const n = Number(val);
-  if (!Number.isFinite(n)) return "";
-  return String(Math.max(0, Math.floor(n)));
+  const s = String(val).trim();
+  if (!/^\d*(\.\d{0,2})?$/.test(s)) return s.slice(0, -1);
+  return s;
 };
 
 const toWholeQuantity = (val) => {
   if (val === "" || val == null) return 0;
   const n = Number(val);
   if (!Number.isFinite(n) || n < 0) return 0;
-  return Math.floor(n);
+  return Math.round((n + Number.EPSILON) * 100) / 100;
 };
 
 const toMoneyNumber = (val) => {
@@ -59,18 +63,7 @@ const INITIAL_FORM_DATA = {
   isTaxable: true,
 };
 
-const INITIAL_TREATMENT_ROW = {
-  treatment: "",
-  qty: 0,
-  date: "",
-  dates: [],
-  mixData: null,
-  catalogData: null,
-  materialData: null,
-  treatmentName: "",
-  price: "",
-  cost: "",
-};
+const INITIAL_TREATMENT_ROW = { ...EMPTY_OTHER_TREATMENT_ROW };
 
 function MiniCalendarWithQty({ selectedDate, onDateChange, qtyValue, onQtyChange, minDate, onPastDateError }) {
   const [viewDate, setViewDate] = useState(() => {
@@ -168,7 +161,7 @@ function MiniCalendarWithQty({ selectedDate, onDateChange, qtyValue, onQtyChange
           type="number"
           value={qtyValue || ""}
           min="0"
-          step="1"
+          step="0.01"
           onChange={(e) => onQtyChange(e.target.value)}
           className="w-full border px-1.5 py-1 text-center text-xs"
           placeholder="0"
@@ -185,9 +178,11 @@ export default function AddCustomer() {
   const [isChemicalChecked, setIsChemicalChecked] = useState(false);
   const [openDateQtyIndex, setOpenDateQtyIndex] = useState(null);
   const [openDateQtyRow, setOpenDateQtyRow] = useState(null);
+  const [openDateQtyChemicalRow, setOpenDateQtyChemicalRow] = useState(null);
 
   const [formData, setFormData] = useState(INITIAL_FORM_DATA);
   const [treatmentRows, setTreatmentRows] = useState([{ ...INITIAL_TREATMENT_ROW }]);
+  const [chemicalTreatmentRows, setChemicalTreatmentRows] = useState([{ ...INITIAL_TREATMENT_ROW }]);
 
   const [chemicalMixes, setChemicalMixes] = useState([]);
   const [materials, setMaterials] = useState([]);
@@ -450,58 +445,43 @@ export default function AddCustomer() {
         return;
       }
 
-      // Validate OTHER TREATMENTS - check if any row has treatment selected but date is missing
-      const incompleteOtherTreatments = treatmentRows.filter((row) => {
-        const ds = Array.isArray(row.dates) ? row.dates : (row.date ? [row.date] : []);
-        // Check for "Other" entries
-        if (row.treatment === "Other") {
-          // If treatmentName is filled but date is missing
-          return (
-            row.treatmentName &&
-            row.treatmentName.trim() !== "" &&
-            ds.length === 0
+      const validateOtherSection = (rows, sectionLabel) => {
+        const incomplete = rows.filter((row) => {
+          const ds = Array.isArray(row.dates) ? row.dates : row.date ? [row.date] : [];
+          if (row.treatment) {
+            return ds.length === 0;
+          }
+          return false;
+        });
+        if (incomplete.length > 0) {
+          toast.error(
+            `Please fill Scheduled Date for all selected treatments in ${sectionLabel}`,
+            { toastId: ADD_CUSTOMER_ERROR_TOAST_ID }
           );
+          return false;
         }
-        // Check for mix selections
-        if (row.treatment && row.treatment !== "" && row.treatment !== "Other") {
-          // If treatment is selected but date is missing
-          return ds.length === 0;
+        const missingQty = rows.filter((row) => {
+          const hasTreatmentName = row.treatment && row.treatment !== "";
+          const ds = Array.isArray(row.dates) ? row.dates : row.date ? [row.date] : [];
+          const hasDate = ds.length > 0;
+          const qty = toWholeQuantity(row.qty || 0);
+          return (hasTreatmentName || hasDate) && qty <= 0;
+        });
+        if (missingQty.length > 0) {
+          toast.error(
+            `Please enter Quantity for all ${sectionLabel} rows where Treatment or Scheduled Date is filled`,
+            { toastId: ADD_CUSTOMER_ERROR_TOAST_ID }
+          );
+          return false;
         }
-        return false;
-      });
+        return true;
+      };
 
-      if (incompleteOtherTreatments.length > 0) {
-        toast.error(
-          "Please fill Scheduled Date for all selected treatments in OTHER TREATMENTS section",
-          {
-            toastId: ADD_CUSTOMER_ERROR_TOAST_ID,
-          },
-        );
+      if (!validateOtherSection(treatmentRows, "OTHER TREATMENTS")) {
         setDisableBtn(false);
         return;
       }
-
-      // Validate OTHER TREATMENTS - quantity should be > 0 when treatment or date is provided
-      const otherTreatmentsMissingQty = treatmentRows.filter((row) => {
-        const hasTreatmentName =
-          (row.treatment && row.treatment !== "" && row.treatment !== "Other") ||
-          (row.treatment === "Other" &&
-            row.treatmentName &&
-            row.treatmentName.trim() !== "");
-        const ds = Array.isArray(row.dates) ? row.dates : (row.date ? [row.date] : []);
-        const hasDate = ds.length > 0;
-        const qty = toWholeQuantity(row.qty || 0);
-        // If user has selected a treatment or entered a name/date, quantity should be > 0
-        return (hasTreatmentName || hasDate) && qty <= 0;
-      });
-
-      if (otherTreatmentsMissingQty.length > 0) {
-        toast.error(
-          "Please enter Quantity for all OTHER TREATMENTS rows where Treatment or Scheduled Date is filled",
-          {
-            toastId: ADD_CUSTOMER_ERROR_TOAST_ID,
-          },
-        );
+      if (!validateOtherSection(chemicalTreatmentRows, "OTHER CHEMICAL TREATMENTS")) {
         setDisableBtn(false);
         return;
       }
@@ -541,118 +521,18 @@ export default function AddCustomer() {
         };
       });
 
-      // Build other treatments payload from bottom table with full mix data
-      // Remove duplicates: same treatment name = keep only one (prefer one with date/qty)
-      // For "Other" entries, allow multiple entries with different treatmentName values
-      const uniqueTreatmentRows = treatmentRows.filter((row, index, self) => {
-        if (!row.treatment) return false;
-        
-        // For "Other" entries, allow multiple if they have different treatmentName
-        if (row.treatment === "Other") {
-          // Keep all "Other" entries (they can have different names)
-          return true;
-        }
-        
-        const rowKey = row.materialData?._id
-          ? `material:${row.materialData._id}`
-          : row.catalogData?._id
-            ? `catalog:${row.catalogData._id}`
-            : row.mixData?._id
-              ? `mix:${row.mixData._id}`
-              : `name:${row.treatment}`;
-        const firstIndex = self.findIndex((r) => {
-          const k = r.materialData?._id
-            ? `material:${r.materialData._id}`
-            : r.catalogData?._id
-              ? `catalog:${r.catalogData._id}`
-              : r.mixData?._id
-                ? `mix:${r.mixData._id}`
-                : `name:${r.treatment}`;
-          return k === rowKey && r.treatment !== "Other";
-        });
-        return index === firstIndex;
-      });
-
-      const otherTreatments = uniqueTreatmentRows
-        .filter((row) => {
-          const ds = Array.isArray(row.dates) ? row.dates : (row.date ? [row.date] : []);
-          // For "Other", check if treatmentName is provided
-          if (row.treatment === "Other") {
-            return row.treatmentName && row.treatmentName.trim() !== "" && ds.length > 0;
-          }
-          // For mix selections, check if treatment is provided
-          return row.treatment && ds.length > 0;
-        })
-        .flatMap((row) => {
-          const ds = Array.isArray(row.dates) ? row.dates : (row.date ? [row.date] : []);
-          const uniqDates = Array.from(new Set(ds.filter(Boolean)));
-
-          // If "Other" is selected, use treatmentName as treatment value
-          if (row.treatment === "Other") {
-            return uniqDates.map((d) => ({
-              treatment: row.treatmentName.trim(), // Use custom name as treatment
-              qty: toWholeQuantity(row.qty || 0),
-              date: d,
-              status: "Scheduled",
-              totalPricePerTank: Number(row.price || 0),
-              totalCostPerTank: Number(row.cost || 0),
-            }));
-          }
-
-          // Include full mix data if available (when a mix is selected)
-          const baseData = {
-            treatment: row.treatment,
-            qty: toWholeQuantity(row.qty || 0),
-            status: "Scheduled",
-          };
-
-          if (row.catalogData) {
-            const pricePerTank = isChemicalChecked
-              ? (row.catalogData.lowerPrice ?? row.catalogData.price ?? 0)
-              : (row.catalogData.price ?? 0);
-            return uniqDates.map((d) => ({
-              ...baseData,
-              date: d,
-              treatment: row.catalogData.treatmentName,
-              totalCostPerTank: row.catalogData.cost || 0,
-              totalPricePerTank: pricePerTank,
-              treatmentCatalogId: row.catalogData._id,
-            }));
-          }
-
-          if (row.materialData) {
-            const unitCost = resolveMaterialUnitCost(row.materialData);
-            const pricePerTank = resolveMaterialUnitPrice(
-              row.materialData,
-              isChemicalChecked
-            );
-            return uniqDates.map((d) => ({
-              ...baseData,
-              date: d,
-              treatment: row.materialData.name,
-              totalCostPerTank: unitCost,
-              totalPricePerTank: pricePerTank,
-              materialId: row.materialData._id,
-            }));
-          }
-
-          if (row.mixData) {
-            const pricePerTank = isChemicalChecked
-              ? (row.mixData.totalCostPerTank ?? 0)
-              : (row.mixData.totalPricePerTank ?? 0);
-            return uniqDates.map((d) => ({
-              ...baseData,
-              date: d,
-              mixName: row.mixData.mixName,
-              chemicals: row.mixData.chemicals || [],
-              totalCostPerTank: row.mixData.totalCostPerTank || 0,
-              totalPricePerTank: pricePerTank,
-              mixId: row.mixData._id,
-            }));
-          }
-
-          return uniqDates.map((d) => ({ ...baseData, date: d }));
-        });
+      const otherTreatments = [
+        ...formatOtherTreatmentRowsForApi(treatmentRows, {
+          isChemicalSection: false,
+          isChemicalMaintenanceEnabled: isChemicalChecked,
+          toQuantity: toWholeQuantity,
+        }),
+        ...formatOtherTreatmentRowsForApi(chemicalTreatmentRows, {
+          isChemicalSection: true,
+          isChemicalMaintenanceEnabled: isChemicalChecked,
+          toQuantity: toWholeQuantity,
+        }),
+      ];
 
       const payload = {
         customerName: formData.name,
@@ -686,7 +566,9 @@ export default function AddCustomer() {
         setIsChemicalChecked(false);
         setOpenDateQtyIndex(null);
         setOpenDateQtyRow(null);
+        setOpenDateQtyChemicalRow(null);
         setTreatmentRows([{ ...INITIAL_TREATMENT_ROW }]);
+        setChemicalTreatmentRows([{ ...INITIAL_TREATMENT_ROW }]);
         window.scrollTo(0, 0);
       } else {
         toast.error(
@@ -712,128 +594,86 @@ export default function AddCustomer() {
   };
 
   const addRow = () => {
-    setTreatmentRows((prev) => [
-      ...prev,
-      {
-        treatment: "",
-        qty: 0,
-        date: "",
-        dates: [],
-        mixData: null,
-        catalogData: null,
-        materialData: null,
-        treatmentName: "", // Custom name for "Other" option
-        price: "", // For "Other" option
-        cost: "", // For "Other" option
-      },
-    ]);
+    setTreatmentRows((prev) => [...prev, { ...INITIAL_TREATMENT_ROW }]);
+  };
+  const addChemicalRow = () => {
+    setChemicalTreatmentRows((prev) => [...prev, { ...INITIAL_TREATMENT_ROW }]);
   };
   const removeRow = (index) => {
     setTreatmentRows((prev) => prev.filter((_, i) => i !== index));
   };
+  const removeChemicalRow = (index) => {
+    setChemicalTreatmentRows((prev) => prev.filter((_, i) => i !== index));
+  };
   const getTreatmentRowKey = getOtherTreatmentSelectionKey;
 
-  const handleRowChange = (index, field, value) => {
+  const makeOtherRowChangeHandler = (rows, setRows) => (index, field, value) => {
+    const isChemicalSection = rows === chemicalTreatmentRows;
+
     if (field === "treatment" && value) {
-      if (value !== "Other") {
-        const isDuplicate = treatmentRows.some(
-          (row, i) => i !== index && getTreatmentRowKey(row) === value
+      if (!isChemicalSection && !value.startsWith(MATERIAL_OPTION_PREFIX)) {
+        toast.error("OTHER TREATMENTS me sirf materials select kar sakte hain.");
+        return;
+      }
+      if (isChemicalSection && value.startsWith(MATERIAL_OPTION_PREFIX)) {
+        toast.error("Materials yahan nahi — OTHER CHEMICAL TREATMENTS me mixes select karein.");
+        return;
+      }
+
+      const isDuplicate = rows.some(
+        (row, i) => i !== index && getTreatmentRowKey(row) === value
+      );
+      if (isDuplicate) {
+        toast.error(
+          "This treatment is already selected. Please choose a different treatment."
         );
-
-        if (isDuplicate) {
-          toast.error(
-            "This treatment is already selected. Please choose a different treatment."
-          );
-          return;
-        }
+        return;
       }
 
-      const updatedRows = [...treatmentRows];
-      const baseReset = {
-        date: "",
-        dates: [],
-        treatmentName: value === "Other" ? updatedRows[index].treatmentName : "",
-      };
-
-      if (value.startsWith(MATERIAL_OPTION_PREFIX)) {
-        const materialId = value.slice(MATERIAL_OPTION_PREFIX.length);
-        const materialItem = materials.find((m) => m._id === materialId);
-        updatedRows[index] = {
-          ...updatedRows[index],
-          ...baseReset,
-          treatment: materialItem?.name || "",
-          mixData: null,
-          catalogData: null,
-          materialData: materialItem || null,
-          price: materialItem
-            ? resolveMaterialUnitPrice(materialItem, isChemicalChecked)
-            : "",
-          cost: materialItem ? resolveMaterialUnitCost(materialItem) : "",
-        };
-      } else if (value.startsWith(CATALOG_OPTION_PREFIX)) {
-        const catalogId = value.slice(CATALOG_OPTION_PREFIX.length);
-        const catalogItem = catalogTreatments.find((c) => c._id === catalogId);
-        updatedRows[index] = {
-          ...updatedRows[index],
-          ...baseReset,
-          treatment: catalogItem?.treatmentName || "",
-          mixData: null,
-          catalogData: catalogItem || null,
-          materialData: null,
-          price: catalogItem
-            ? isChemicalChecked
-              ? catalogItem.lowerPrice ?? catalogItem.price ?? ""
-              : catalogItem.price ?? ""
-            : "",
-          cost: catalogItem?.cost ?? "",
-        };
-      } else if (value === "Other") {
-        updatedRows[index] = {
-          ...updatedRows[index],
-          ...baseReset,
-          treatment: "Other",
-          mixData: null,
-          catalogData: null,
-          materialData: null,
-        };
-      } else {
-        const selectedMix = chemicalMixes.find((mix) => mix.mixName === value);
-        updatedRows[index] = {
-          ...updatedRows[index],
-          ...baseReset,
-          treatment: value,
-          mixData: selectedMix || null,
-          catalogData: null,
-          materialData: null,
-          price: selectedMix ? selectedMix.totalPricePerTank ?? "" : "",
-          cost: selectedMix ? selectedMix.totalCostPerTank ?? "" : "",
-        };
+      const updatedRows = [...rows];
+      const nextRow = applyOtherTreatmentSelection(updatedRows[index], value, {
+        materials,
+        catalogTreatments,
+        chemicalMixes,
+        isChemicalSection,
+        isChemicalMaintenanceEnabled: isChemicalChecked,
+      });
+      if (nextRow === updatedRows[index] && value) {
+        return;
       }
-
-      setTreatmentRows(updatedRows);
+      updatedRows[index] = nextRow;
+      setRows(updatedRows);
       return;
     }
 
     if (field === "date") {
-      const updatedRows = [...treatmentRows];
+      const updatedRows = [...rows];
       const cur = Array.isArray(updatedRows[index].dates)
         ? updatedRows[index].dates
-        : (updatedRows[index].date ? [updatedRows[index].date] : []);
+        : updatedRows[index].date
+          ? [updatedRows[index].date]
+          : [];
       const next = value && !cur.includes(value) ? [...cur, value] : cur;
       updatedRows[index] = {
         ...updatedRows[index],
         date: value || "",
         dates: next,
       };
-      setTreatmentRows(updatedRows);
+      setRows(updatedRows);
       return;
     }
 
-    const updatedRows = [...treatmentRows];
+    const updatedRows = [...rows];
     updatedRows[index][field] =
       field === "qty" ? normalizeQuantityInput(value) : value;
-    setTreatmentRows(updatedRows);
+    setRows(updatedRows);
   };
+
+  const handleRowChange = makeOtherRowChangeHandler(treatmentRows, setTreatmentRows);
+  const handleChemicalRowChange = makeOtherRowChangeHandler(
+    chemicalTreatmentRows,
+    setChemicalTreatmentRows
+  );
 
   return (
     <div className={`${tableSize === 250 ? "md:ml-[250px]" : "md:ml-[90px]"}`}>
@@ -990,7 +830,7 @@ export default function AddCustomer() {
                             type="number"
                             value={rowQty[i] || ""}
                             min="0"
-                            step="1"
+                            step="0.01"
                             onChange={(e) =>
                               setRowQty({
                                 ...rowQty,
@@ -1135,9 +975,17 @@ export default function AddCustomer() {
                   />
                 </div> */}
 
-                <h2 className="font-semibold text-lg">OTHER TREATMENTS</h2>
+                <div className="text-lg font-semibold text-gray-900">OTHER TREATMENTS</div>
 
-                <table className="w-full border ">
+                <table className="w-full border border-gray-300 table-fixed">
+                  <colgroup>
+                    <col style={{ width: "60%" }} />
+                    <col style={{ width: "7%" }} />
+                    <col style={{ width: "15%" }} />
+                    <col style={{ width: "6%" }} />
+                    <col style={{ width: "6%" }} />
+                    <col style={{ width: "6%" }} />
+                  </colgroup>
                   <thead className="bg-[#00613e] text-white">
                     <tr className=" py-10">
                       <th className="p-2 border">TREATMENT</th>
@@ -1157,9 +1005,9 @@ export default function AddCustomer() {
                           (r, i) => i !== index && getTreatmentRowKey(r) === key
                         );
 
-                      const dropdownOptions = buildOtherTreatmentDropdownOptions({
-                        chemicalMixes,
+                      const dropdownOptions = buildMaterialOtherTreatmentDropdownOptions({
                         materials,
+                        chemicalMixes,
                         isKeyTaken: isKeyTakenElsewhere,
                       });
 
@@ -1170,47 +1018,34 @@ export default function AddCustomer() {
                       return (
                         <tr key={index}>
                           {/* Treatment */}
-                          <td>
-                            {row.treatment === "Other" ? (
-                              <input
-                                type="text"
-                                value={row.treatmentName || ""}
-                                onChange={(e) =>
-                                  handleRowChange(index, "treatmentName", e.target.value)
-                                }
-                                className="w-full border px-2 py-1"
-                                placeholder="Enter Treatment Name"
-                              />
-                            ) : (
-                              <select
-                                value={selectedTreatmentValue}
-                                onChange={(e) =>
-                                  handleRowChange(
-                                    index,
-                                    "treatment",
-                                    e.target.value,
-                                  )
-                                }
-                                className="w-full border px-2 py-1"
-                              >
-                                <option value="">Select Treatment</option>
-                                {dropdownOptions.map((opt) => (
-                                  <option key={opt.key} value={opt.key}>
-                                    {opt.label}
-                                  </option>
-                                ))}
-                                <option value="Other">Other</option>
-                              </select>
-                            )}
+                          <td className="border p-2">
+                            <select
+                              value={selectedTreatmentValue}
+                              onChange={(e) =>
+                                handleRowChange(
+                                  index,
+                                  "treatment",
+                                  e.target.value,
+                                )
+                              }
+                              className="w-full border px-2 py-1"
+                            >
+                              <option value="">Select Treatment</option>
+                              {dropdownOptions.map((opt) => (
+                                <option key={opt.key} value={opt.key}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
                           </td>
 
                         {/* Quantity - inline and synced with Date+QTY popup */}
-                        <td>
+                        <td className="border p-2">
                           <input
                             type="number"
                             value={row.qty}
                             min="0"
-                            step="1"
+                            step="0.01"
                             onChange={(e) =>
                               handleRowChange(index, "qty", e.target.value)
                             }
@@ -1219,12 +1054,12 @@ export default function AddCustomer() {
                         </td>
 
                         {/* Schedule Date - click opens Date+QTY popup */}
-                        <td className="relative">
+                        <td className="border p-2 relative">
                           <div
                             data-date-qty-trigger
                             role="button"
                             tabIndex={0}
-                            onClick={(e) => { e.stopPropagation(); setOpenDateQtyRow(openDateQtyRow === index ? null : index); setOpenDateQtyIndex(null); }}
+                            onClick={(e) => { e.stopPropagation(); setOpenDateQtyRow(openDateQtyRow === index ? null : index); setOpenDateQtyIndex(null); setOpenDateQtyChemicalRow(null); }}
                             onKeyDown={(e) => e.key === "Enter" && setOpenDateQtyRow(openDateQtyRow === index ? null : index)}
                             className="flex items-center justify-between border px-2 py-1 cursor-pointer hover:bg-gray-50 min-h-[34px]"
                           >
@@ -1289,111 +1124,247 @@ export default function AddCustomer() {
                           )}
                         </td>
 
-                        {/* Price - Yes = lower price, No = higher price */}
-                        <td>
-                          {row.treatment === "Other" ? (
-                            <input
-                              type="number"
-                              value={row.price || ""}
-                              min="0"
-                              step="0.01"
-                              onChange={(e) =>
-                                handleRowChange(index, "price", e.target.value)
-                              }
-                              className="w-full border px-2 py-1"
-                              placeholder="0.00"
-                            />
-                          ) : row.materialData != null ? (
-                            <span className="font-medium">
-                              ${Number(
-                                resolveMaterialUnitPrice(
-                                  row.materialData,
-                                  isChemicalChecked
-                                )
-                              ).toFixed(2)}
-                            </span>
-                          ) : row.catalogData != null ? (
-                            <span className="font-medium">
-                              ${Number(
-                                isChemicalChecked
-                                  ? (row.catalogData.lowerPrice ??
-                                      row.catalogData.price ??
-                                      0)
-                                  : (row.catalogData.price ?? 0)
-                              ).toFixed(2)}
-                            </span>
-                          ) : row.mixData != null ? (
-                            <span className="font-medium">
-                              ${Number(
-                                isChemicalChecked
-                                  ? (row.mixData.totalCostPerTank ?? 0)
-                                  : (row.mixData.totalPricePerTank ?? 0)
-                              ).toFixed(2)}
-                            </span>
-                          ) : (
-                            <span className="text-gray-400">-</span>
-                          )}
+                        {/* Price */}
+                        <td className="border p-2">
+                          <input
+                            type="number"
+                            value={row.price ?? ""}
+                            min="0"
+                            step="0.01"
+                            onChange={(e) =>
+                              handleRowChange(index, "price", e.target.value)
+                            }
+                            className="w-full border px-2 py-1"
+                            placeholder="0.00"
+                          />
                         </td>
 
-                        {/* Cost - editable for "Other", from catalog or mix when selected */}
-                        <td>
-                          {row.treatment === "Other" ? (
-                            <input
-                              type="number"
-                              value={row.cost || ""}
-                              min="0"
-                              step="0.01"
-                              onChange={(e) =>
-                                handleRowChange(index, "cost", e.target.value)
-                              }
-                              className="w-full border px-2 py-1"
-                              placeholder="0.00"
-                            />
-                          ) : row.materialData != null ? (
-                            <span className="font-medium">
-                              ${Number(
-                                resolveMaterialUnitCost(row.materialData)
-                              ).toFixed(2)}
-                            </span>
-                          ) : row.catalogData != null ? (
-                            <span className="font-medium">
-                              ${Number(row.catalogData.cost ?? row.cost ?? 0).toFixed(2)}
-                            </span>
-                          ) : row.mixData != null ? (
-                            <span className="font-medium">
-                              ${Number(row.mixData.totalCostPerTank ?? row.cost ?? 0).toFixed(2)}
-                            </span>
-                          ) : (
-                            <span className="text-gray-400">-</span>
-                          )}
+                        {/* Cost */}
+                        <td className="border p-2">
+                          <input
+                            type="number"
+                            value={row.cost ?? ""}
+                            min="0"
+                            step="0.01"
+                            onChange={(e) =>
+                              handleRowChange(index, "cost", e.target.value)
+                            }
+                            className="w-full border px-2 py-1"
+                            placeholder="0.00"
+                          />
                         </td>
 
                         {/* Actions */}
-                        <td className="flex gap-2 pl-2">
-                          {/* Minus */}
+                        <td className="border p-2 align-middle">
+                          <div className="flex items-center justify-center gap-2">
                           {treatmentRows.length > 1 && (
                             <button
                               type="button"
                               onClick={() => removeRow(index)}
-                              className="text-white bg-red-500 px-2 rounded-full"
+                              className="text-white bg-red-500 px-2 rounded-full leading-none"
                             >
                               −
                             </button>
                           )}
 
-                          {/* Plus (sirf last row pe aur jab unselected treatments available hon ya "Other" add karna ho) */}
                           {index === treatmentRows.length - 1 &&
                             canAddMoreRows && (
                               <button
                                 type="button"
                                 onClick={addRow}
-                                className="text-white bg-green-500 px-2 rounded-full"
+                                className="text-white bg-green-500 px-2 rounded-full leading-none"
                               >
                                 +
                               </button>
                             )}
+                          </div>
                         </td>
                       </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+
+                <div className="text-lg font-semibold text-gray-900 mt-6">OTHER CHEMICAL TREATMENTS</div>
+
+                <table className="w-full border border-gray-300 table-fixed">
+                  <colgroup>
+                    <col style={{ width: "60%" }} />
+                    <col style={{ width: "7%" }} />
+                    <col style={{ width: "15%" }} />
+                    <col style={{ width: "6%" }} />
+                    <col style={{ width: "6%" }} />
+                    <col style={{ width: "6%" }} />
+                  </colgroup>
+                  <thead className="bg-[#00613e] text-white">
+                    <tr className=" py-10">
+                      <th className="p-2 border">TREATMENT</th>
+                      <th className="p-2 border">QUANTITY</th>
+                      <th className="p-2 border">SCHEDULE DATE</th>
+                      <th className="p-2 border">PRICE</th>
+                      <th className="p-2 border">COST</th>
+                      <th className="p-2 border">ACTION</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {chemicalTreatmentRows.map((row, index) => {
+                      const isKeyTakenElsewhere = (key) =>
+                        key &&
+                        chemicalTreatmentRows.some(
+                          (r, i) => i !== index && getTreatmentRowKey(r) === key
+                        );
+
+                      const dropdownOptions = buildChemicalOtherTreatmentDropdownOptions({
+                        chemicalMixes,
+                        catalogTreatments,
+                        isKeyTaken: isKeyTakenElsewhere,
+                      });
+
+                      const selectedTreatmentValue = getOtherTreatmentSelectionKey(row);
+
+                      return (
+                        <tr key={`chem-${index}`}>
+                          <td className="border p-2">
+                            <select
+                              value={selectedTreatmentValue}
+                              onChange={(e) =>
+                                handleChemicalRowChange(index, "treatment", e.target.value)
+                              }
+                              className="w-full border px-2 py-1"
+                            >
+                              <option value="">Select Treatment</option>
+                              {dropdownOptions.map((opt) => (
+                                <option key={opt.key} value={opt.key}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="border p-2">
+                            <input
+                              type="number"
+                              value={row.qty}
+                              min="0"
+                              step="0.01"
+                              onChange={(e) =>
+                                handleChemicalRowChange(index, "qty", e.target.value)
+                              }
+                              className="w-full border px-2 py-1"
+                            />
+                          </td>
+                          <td className="border p-2 relative">
+                            <div
+                              data-date-qty-trigger
+                              role="button"
+                              tabIndex={0}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenDateQtyChemicalRow(
+                                  openDateQtyChemicalRow === index ? null : index
+                                );
+                                setOpenDateQtyRow(null);
+                                setOpenDateQtyIndex(null);
+                              }}
+                              onKeyDown={(e) => e.key === "Enter" && setOpenDateQtyChemicalRow(openDateQtyChemicalRow === index ? null : index)}
+                              className="flex items-center justify-between border px-2 py-1 cursor-pointer hover:bg-gray-50 min-h-[34px]"
+                            >
+                              <span className={(Array.isArray(row.dates) ? row.dates.length > 0 : !!row.date) ? "" : "text-gray-500"}>
+                                {(() => {
+                                  const ds = Array.isArray(row.dates) ? row.dates : (row.date ? [row.date] : []);
+                                  if (ds.length === 0) return "mm/dd/yyyy";
+                                  const first = ds[0];
+                                  const firstLabel = new Date(first + "T12:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
+                                  return ds.length === 1 ? firstLabel : `${firstLabel} (+${ds.length - 1})`;
+                                })()}
+                              </span>
+                              <span className="text-gray-500 ml-1">📅</span>
+                            </div>
+                            {(() => {
+                              const ds = Array.isArray(row.dates) ? row.dates : (row.date ? [row.date] : []);
+                              if (!ds.length) return null;
+                              return (
+                                <div className="mt-1 flex flex-wrap gap-1 justify-start">
+                                  {ds.map((d) => (
+                                    <span
+                                      key={d}
+                                      className="inline-flex items-center gap-1 bg-gray-100 border border-gray-200 rounded px-1.5 py-0.5 text-[10px]"
+                                    >
+                                      {new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" })}
+                                      <button
+                                        type="button"
+                                        className="text-gray-600 hover:text-red-600 leading-none"
+                                        title="Remove date"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setChemicalTreatmentRows((prev) => {
+                                            const next = [...prev];
+                                            const cur = Array.isArray(next[index].dates) ? next[index].dates : (next[index].date ? [next[index].date] : []);
+                                            const filtered = cur.filter((x) => x !== d);
+                                            next[index] = { ...next[index], dates: filtered, date: filtered[filtered.length - 1] || "" };
+                                            return next;
+                                          });
+                                        }}
+                                      >
+                                        ×
+                                      </button>
+                                    </span>
+                                  ))}
+                                </div>
+                              );
+                            })()}
+                            {openDateQtyChemicalRow === index && (
+                              <div data-date-qty-popup className="absolute right-0 top-full mt-1 z-50 bg-white border-2 border-[#00613e] rounded shadow-lg p-2">
+                                <MiniCalendarWithQty
+                                  selectedDate={(() => {
+                                    const ds = Array.isArray(row.dates) ? row.dates : (row.date ? [row.date] : []);
+                                    return ds.length ? ds[ds.length - 1] : "";
+                                  })()}
+                                  onDateChange={(v) => handleChemicalRowChange(index, "date", v)}
+                                  qtyValue={row.qty || ""}
+                                  onQtyChange={(v) => handleChemicalRowChange(index, "qty", v)}
+                                  minDate={getTodayDate()}
+                                  onPastDateError={() => toast.error("Schedule date cannot be in the past", { toastId: SCHEDULE_DATE_PAST_TOAST_ID })}
+                                />
+                              </div>
+                            )}
+                          </td>
+                          <td className="border p-2">
+                            <input
+                              type="number"
+                              value={row.price ?? ""}
+                              min="0"
+                              step="0.01"
+                              onChange={(e) =>
+                                handleChemicalRowChange(index, "price", e.target.value)
+                              }
+                              className="w-full border px-2 py-1"
+                              placeholder="0.00"
+                            />
+                          </td>
+                          <td className="border p-2">
+                            <input
+                              type="number"
+                              value={row.cost ?? ""}
+                              min="0"
+                              step="0.01"
+                              onChange={(e) =>
+                                handleChemicalRowChange(index, "cost", e.target.value)
+                              }
+                              className="w-full border px-2 py-1"
+                              placeholder="0.00"
+                            />
+                          </td>
+                          <td className="border p-2 align-middle">
+                            <div className="flex items-center justify-center gap-2">
+                            {chemicalTreatmentRows.length > 1 && (
+                              <button type="button" onClick={() => removeChemicalRow(index)} className="text-white bg-red-500 px-2 rounded-full leading-none">−</button>
+                            )}
+                            {index === chemicalTreatmentRows.length - 1 && (
+                              <button type="button" onClick={addChemicalRow} className="text-white bg-green-500 px-2 rounded-full leading-none">+</button>
+                            )}
+                            </div>
+                          </td>
+                        </tr>
                       );
                     })}
                   </tbody>

@@ -7,16 +7,16 @@ const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 const normalizeQuantityStr = (val) => {
   if (val === "" || val == null) return "";
-  const n = Number(val);
-  if (!Number.isFinite(n)) return "";
-  return String(Math.max(0, Math.floor(n)));
+  const s = String(val).trim();
+  if (!/^\d*(\.\d{0,2})?$/.test(s)) return s.slice(0, -1);
+  return s;
 };
 
 const toWholeQuantity = (val) => {
   if (val === "" || val == null) return 0;
   const n = Number(val);
   if (!Number.isFinite(n) || n < 0) return 0;
-  return Math.floor(n);
+  return Math.round((n + Number.EPSILON) * 100) / 100;
 };
 
 const EditCustomer = ({ show, onClose, data, onSuccess, projectId, projectType, projectStatus }) => {
@@ -277,7 +277,7 @@ const EditCustomer = ({ show, onClose, data, onSuccess, projectId, projectType, 
                         type="number"
                         value={quantity}
                         min="0"
-                        step="1"
+                        step="0.01"
                         onChange={(e) => {
                           const val = normalizeQuantityStr(e.target.value);
                           setQuantity(val);
@@ -304,7 +304,7 @@ const EditCustomer = ({ show, onClose, data, onSuccess, projectId, projectType, 
                     setPrice(String((toWholeQuantity(val) * unitPrice).toFixed(2)));
                   }}
                   min="0"
-                  step="1"
+                  step="0.01"
                 />
               </div>
 
