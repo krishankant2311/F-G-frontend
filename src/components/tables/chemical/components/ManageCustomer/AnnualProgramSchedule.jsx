@@ -630,25 +630,18 @@ const CustomerAnnualProgramSchedule = () => {
   ];
 
   // ✅ total (price total) - recalculate based on current quantities
-  const programTotal = scheduledTreatments.reduce((sum, t, index) => {
-    if (t.type === "annual") {
-      const qtyKey = getQtyKey(t);
-      const currentQty = rowQty[qtyKey] !== undefined ? wholeQuantity(rowQty[qtyKey]) : wholeQuantity(t.quantity || 0);
-      const unitPrice = t.unitPrice || (t.quantity > 0 ? (t.price / t.quantity) : 100);
-      return sum + (currentQty * unitPrice);
-    } else {
-      // For other treatments, use saved price or calculate from quantity
-      const qtyKey = getQtyKey(t);
-      const currentQty = rowQty[qtyKey] !== undefined ? wholeQuantity(rowQty[qtyKey]) : wholeQuantity(t.quantity || 0);
-      if (t.type === "other") {
-        const pricePerTank = Number(t.price / (t.quantity || 1)) || 0;
-        return sum + (currentQty * pricePerTank);
-      } else {
-        // other-new: use mixData price
-        const pricePerTank = Number(t.price / (t.quantity || 1)) || 0;
-        return sum + (currentQty * pricePerTank);
-      }
-    }
+  const programTotal = scheduledTreatments.reduce((sum, t) => {
+    const qtyKey = getQtyKey(t);
+    const currentQty =
+      rowQty[qtyKey] !== undefined
+        ? wholeQuantity(rowQty[qtyKey])
+        : wholeQuantity(t.quantity || 0);
+    const baseQty = Number(t.quantity) || 0;
+    const basePrice = Number(t.price) || 0;
+    const unitPrice =
+      t.unitPrice ??
+      (baseQty > 0 ? basePrice / baseQty : t.type === "annual" ? 100 : 0);
+    return sum + currentQty * (Number(unitPrice) || 0);
   }, 0);
 
   // ✅ total (cost total) - recalculate based on current quantities

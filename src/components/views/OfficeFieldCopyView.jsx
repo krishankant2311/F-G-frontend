@@ -104,7 +104,7 @@ export default function OfficeFieldCopyView() {
     const source = String(entry?.source || "").toLowerCase();
     const jobTypeText = String(entry?.jobType || "").toLowerCase();
     const referenceText = String(entry?.reference || "").toLowerCase();
-    return (
+      return (
       source === "labor" ||
       jobTypeText.includes("labor") ||
       referenceText.includes("labor")
@@ -2449,8 +2449,8 @@ export default function OfficeFieldCopyView() {
                           TAXABLE AMOUNT
                         </span>
                         <span className="text-end tabular-nums whitespace-nowrap">
-                          <>
-                            <b>$</b>{" "}
+                            <>
+                              <b>$</b>{" "}
                             {officeInvoiceSummaryDisplay.displayCostTaxable.toLocaleString("en-US", {
                               minimumFractionDigits: 2,
                               maximumFractionDigits: 2,
@@ -2479,8 +2479,8 @@ export default function OfficeFieldCopyView() {
                             <>
                           <b>$</b>{" "}
                               {invoiceSalesTaxOnCost.toLocaleString("en-US", {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
                               })}
                             </>
                           ) : (
@@ -2492,10 +2492,10 @@ export default function OfficeFieldCopyView() {
                         <span className="text-end tabular-nums whitespace-nowrap">
                           <b>$</b>{" "}
                           {invoiceSalesTax.toLocaleString("en-US", {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                })}
-                          </span>
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
+                        </span>
                       </div>
                       <hr />
                       <div
@@ -2505,10 +2505,10 @@ export default function OfficeFieldCopyView() {
                         <span className="text-end tabular-nums whitespace-nowrap">
                           {officeInvoiceSummaryDisplay.costGrandTotal > 0 ? (
                             <>
-                              <b>$</b>{" "}
+                          <b>$</b>{" "}
                               {officeInvoiceSummaryDisplay.costGrandTotal.toLocaleString("en-US", {
-                                minimumFractionDigits: 2,
-                                maximumFractionDigits: 2,
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
                               })}
                             </>
                           ) : (
@@ -2520,9 +2520,9 @@ export default function OfficeFieldCopyView() {
                         <span className="text-end tabular-nums whitespace-nowrap border-b border-black pb-[7px]">
                           <b>$</b>{" "}
                           {officeInvoiceSummaryDisplay.sellGrandTotal.toLocaleString("en-US", {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}
                         </span>
                       </div>
                       {billingTypeLower.includes("no bid") &&
@@ -3148,8 +3148,8 @@ export default function OfficeFieldCopyView() {
                   >
                     <span className="col-span-3 min-w-0">Taxable Amount</span>
                     <span className="justify-self-end text-end tabular-nums whitespace-nowrap">
-                      <>
-                        <b>$</b>{" "}
+                        <>
+                          <b>$</b>{" "}
                         {officeInvoiceSummaryDisplay.displayCostTaxable.toLocaleString("en-US", {
                           minimumFractionDigits: 2,
                           maximumFractionDigits: 2,

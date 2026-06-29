@@ -299,6 +299,7 @@ import AnnualProgram from "../pages/chemicalMaintenance/AnnualProgram";
 import AnnualProgramSchedule from "../pages/chemicalMaintenance/AnnualProgramSchedule";
 import ClientReconcile from "../pages/chemicalMaintenance/ClientReconcile";
 import OtherTreatments from "../pages/chemicalMaintenance/OtherTreatments";
+import ArchivedPlans from "../pages/chemicalMaintenance/ArchivedPlans";
 
 export default function AllRoutes() {
   return (
@@ -424,6 +425,7 @@ export default function AllRoutes() {
           <Route path="/panel/office/chemical-maintenance/dashboard" element={<ChemicalDashboard />} />
           <Route path="/panel/office/chemical-maintenance/add-new-customer" element={<ChemicalAddNewCustomer />} />
           <Route path="/panel/office/chemical-maintenance/manage-customer" element={<ManageCustomers />} />
+          <Route path="/panel/office/chemical-maintenance/archived-plans" element={<ArchivedPlans />} />
           <Route path="/panel/office/chemical-maintenance/add-chemicals" element={<Chemicals />} />
           <Route path="/panel/office/chemical-maintenance/other-treatments" element={<OtherTreatments />} />
           <Route path="/panel/office/chemical-maintenance/chemicals-mixs" element={<ChemicalMixes />} />

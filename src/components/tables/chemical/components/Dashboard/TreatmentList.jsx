@@ -540,7 +540,7 @@ export default function CustomerTreatmentList() {
           </>
         )}
 
-        {/* COMPLETED: View and Edit */}
+        {/* COMPLETED: View and Edit (historical year-end rows are view-only) */}
         {status === "Completed" && (
           <>
             <button
@@ -554,17 +554,19 @@ export default function CustomerTreatmentList() {
             >
               <i className="fa fa-eye"></i>
             </button>
-            <button
-              type="button"
-              title="Edit"
-              onClick={(e) => {
-                stop(e);
-                setEditData(t);
-                setEditModalOpen(true);
-              }}
-            >
-              <i className="fa fa-edit"></i>
-            </button>
+            {!t.isHistorical && (
+              <button
+                type="button"
+                title="Edit"
+                onClick={(e) => {
+                  stop(e);
+                  setEditData(t);
+                  setEditModalOpen(true);
+                }}
+              >
+                <i className="fa fa-edit"></i>
+              </button>
+            )}
           </>
         )}
 

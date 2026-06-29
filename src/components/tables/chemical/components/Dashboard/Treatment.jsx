@@ -32,6 +32,46 @@ const computeStatus = (status, dateVal) => {
   return s;
 };
 
+const appendHistoryTreatments = (customer, treatments, { withIds = false } = {}) => {
+  const customerId = customer._id;
+  const customerName = customer.customerName || "-";
+
+  (customer.completedTreatmentsHistory || []).forEach((block) => {
+    (block.treatments || []).forEach((t, index) => {
+      const dateVal = t.date;
+      const qty = Number(t.qty ?? 0);
+      const hasDate = dateVal != null && !isNaN(new Date(dateVal).getTime());
+      const hasQty = qty > 0;
+      const hasPrice = Number(t.price || 0) > 0;
+      if (!hasDate && !hasQty && !hasPrice) return;
+
+      const row = {
+        scheduledDate: formatDisplayDate(dateVal),
+        treatment: t.treatment || "-",
+        quantity: hasQty ? qty : "-",
+        status: "Completed",
+        price: t.price != null ? String(t.price) : "-",
+        projectCode: t.projectCode || "-",
+        planYear: block.planYear,
+        isHistorical: true,
+      };
+
+      if (withIds) {
+        treatments.push({
+          ...row,
+          _id: `${customerId}-history-${block.planYear}-${index}`,
+          customerId,
+          customerName,
+          scheduledDateRaw: dateVal,
+          type: t.type || "annual",
+        });
+      } else {
+        treatments.push(row);
+      }
+    });
+  });
+};
+
 function buildTreatmentsForCustomer(customer) {
   const treatments = [];
   (customer.annualTreatments || []).forEach((t) => {
@@ -67,6 +107,7 @@ function buildTreatmentsForCustomer(customer) {
       projectCode: "-",
     });
   });
+  appendHistoryTreatments(customer, treatments);
   return treatments;
 }
 
@@ -134,7 +175,9 @@ export function buildCustomerWithTreatments(customer) {
       originalIndex: index,
     });
   });
-  
+
+  appendHistoryTreatments(customer, treatments, { withIds: true });
+
   return { _id: customerId, customerName: customer.customerName || "-", treatments };
 }
 

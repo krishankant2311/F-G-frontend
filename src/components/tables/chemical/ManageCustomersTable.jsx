@@ -93,6 +93,7 @@ export default function ManageCustomersTable() {
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [rolloverLoadingId, setRolloverLoadingId] = useState("");
 
   const { tableSize } = useTableContext();
 
@@ -280,6 +281,52 @@ export default function ManageCustomersTable() {
     } finally {
       setDisableBtn(false);
       setDeleteLoading(false);
+    }
+  };
+
+  const handleRollover = async (customer) => {
+    if (!customer?._id || rolloverLoadingId) return;
+    const currentYear = customer.planYear || new Date().getFullYear();
+    const nextYear = Number(currentYear) + 1;
+    const contractLabel =
+      customer.contractTotal != null && customer.contractTotal !== ""
+        ? `$${Number(customer.contractTotal).toFixed(2)}`
+        : "$0.00";
+    const confirmed = window.confirm(
+      `Archive ${currentYear} plan for "${customer.customerName}" and start ${nextYear} plan?\n\n` +
+        `• ${currentYear} snapshot → Archived Plans\n` +
+        `• Contract total carries forward: ${contractLabel}\n` +
+        `• Materials used to date resets to $0.00 for ${nextYear}\n` +
+        `• Same annual program rows, fresh schedule (qty/dates cleared)\n` +
+        `• Other chemical treatments carry into the new year program (qty/dates cleared)`
+    );
+    if (!confirmed) return;
+
+    try {
+      setRolloverLoadingId(customer._id);
+      const token = localStorage.getItem("f&gstafftoken");
+      if (!token) {
+        toast.error("Token missing. Please login again.");
+        return;
+      }
+
+      const response = await axios.post(
+        `${process.env.REACT_APP_API_BASE_URL}/chemical-maintenance/customers/${customer._id}/rollover`,
+        {},
+        { headers: { token } }
+      );
+
+      if (response.data.success) {
+        toast.success(response.data.message || "Plan archived and new year started");
+        getAllChemicalCustomers();
+      } else {
+        toast.error(response.data.message || "Rollover failed");
+      }
+    } catch (error) {
+      console.error("Rollover error:", error);
+      toast.error(error.response?.data?.message || "Rollover failed");
+    } finally {
+      setRolloverLoadingId("");
     }
   };
 
@@ -590,57 +637,7 @@ export default function ManageCustomersTable() {
                     } ml-2`}
                   ></i>
                 </th>
-                {/* <th onClick={() => handleSort("customerName")}>
-                  quantity{" "}
-                  <i
-                    className={`${
-                      sortOrder === "asc" && sortBy === "customerName"
-                        ? "fa fa-sort-amount-asc"
-                        : "fa fa-sort-amount-desc"
-                    } ml-2`}
-                  ></i>
-                </th> */}
-
-                {/* <th onClick={() => handleSort("description")}>
-                  Description{" "}
-                  <i
-                    className={`${
-                      sortOrder === "asc" && sortBy === "description"
-                        ? "fa fa-sort-amount-asc"
-                        : "fa fa-sort-amount-desc"
-                    } ml-2`}
-                  ></i>
-                </th> */}
-                {/* <th onClick={() => handleSort("jobName")}>
-                  Job Name{" "}
-                  <i
-                    className={`${
-                      sortOrder === "asc" && sortBy === "jobName"
-                        ? "fa fa-sort-amount-asc"
-                        : "fa fa-sort-amount-desc"
-                    } ml-2`}
-                  ></i>
-                </th> */}
-                {/* <th onClick={() => handleSort("billingType")}>
-                  Billing Type{" "}
-                  <i
-                    className={`${
-                      sortOrder === "asc" && sortBy === "billingType"
-                        ? "fa fa-sort-amount-asc"
-                        : "fa fa-sort-amount-desc"
-                    } ml-2`}
-                  ></i>
-                </th> */}
-                {/* <th onClick={() => handleSort("status")}>
-                  Status{" "}
-                  <i
-                    className={`${
-                      sortOrder === "asc" && sortBy === "status"
-                        ? "fa fa-sort-amount-asc"
-                        : "fa fa-sort-amount-desc"
-                    } ml-2`}
-                  ></i>
-                </th> */}
+                <th>Plan Year</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -653,7 +650,9 @@ export default function ManageCustomersTable() {
                         <td>{item.serialNo}</td>
                         {/* <td>{item.projectCode ? item.projectCode : "-"}</td> */}
                         <td>{item.customerName}</td>
-                        <td>{item.email}</td> <td>{item.phone}</td>
+                        <td>{item.email}</td>
+                        <td>{item.phone}</td>
+                        <td>{item.planYear || new Date().getFullYear()}</td>
                         {/* <td>{item.status}</td> */}
                         {/* <td className="flex justify-center text-center">
                           <div
@@ -680,12 +679,20 @@ export default function ManageCustomersTable() {
                         <td className="flex justify-center gap-4">
                           <button
                             onClick={() => {
-                              setSelectedCustomer(item); // pura customer data
-                              setShowEditModal(true); // modal open
+                              setSelectedCustomer(item);
+                              setShowEditModal(true);
                             }}
                             title="Edit Customer"
                           >
                             <i className="fa fa-edit"></i>
+                          </button>
+
+                          <button
+                            onClick={() => handleRollover(item)}
+                            disabled={rolloverLoadingId === item._id}
+                            title="Archive current year and start new plan year"
+                          >
+                            <i className="fa fa-calendar"></i>
                           </button>
 
                           {item.status === "Active" ||
