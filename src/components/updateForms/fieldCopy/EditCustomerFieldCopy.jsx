@@ -25,6 +25,10 @@ import {
   replaceMaterialRowsInForms,
 } from "../../../utils/customerCopyMaterialMerge";
 import CustomerSalesOrderPreviewModal from "./CustomerSalesOrderPreviewModal";
+import {
+  hydrateFormsFromCustomerCopyData,
+  hydrateLaborDataFromCustomerCopy,
+} from "../../../utils/customerCopyEditHydrate";
 
 export default function EditCustomerFieldCopy() {
   const [formData, setFormData] = useState({
@@ -70,7 +74,8 @@ export default function EditCustomerFieldCopy() {
   const [adminTax, setAdminTax] = useState(0);
   const [address, setAddress] = useState("");
   const [showSalesOrderPreview, setShowSalesOrderPreview] = useState(false);
-  const { id } = useParams();
+  const { id, entryDate, index: copyIndex } = useParams();
+  const isEditLatestMode = Boolean(entryDate && copyIndex != null && copyIndex !== "");
   const navigate = useNavigate();
 
   const { tableSize } = useTableContext();
@@ -78,13 +83,17 @@ export default function EditCustomerFieldCopy() {
   useEffect(() => {
     getProjectById();
     getJobTypeById();
-    getCustomerFieldCopyData();
+    if (isEditLatestMode) {
+      loadLatestCustomerCopyForEdit();
+    } else {
+      getCustomerFieldCopyData();
+    }
     getMaterials();
     getTaxPercentage();
     getJobTypes();
     getFGAddress();
     window.scrollTo(0, 0);
-  }, []);
+  }, [id, entryDate, copyIndex]);
 
   useEffect(() => {
     getJobTypeById();
@@ -188,6 +197,40 @@ export default function EditCustomerFieldCopy() {
     } catch (error) {
       console.error(error);
       toast.error(error.response.message);
+    }
+  };
+
+  const loadLatestCustomerCopyForEdit = async () => {
+    try {
+      const token = localStorage.getItem("f&gstafftoken");
+      const headers = {
+        token: token,
+        "Content-Type": "application/json",
+      };
+      const response = await axios.get(
+        `${process.env.REACT_APP_API_BASE_URL}/project/get-customer-copy/${id}/${entryDate}/${copyIndex}`,
+        { headers: headers }
+      );
+      if (response.data.statusCode === 200) {
+        const copyLines = response.data.result?.customerCopiesData || [];
+        const hydratedForms = hydrateFormsFromCustomerCopyData(copyLines);
+        if (!hydratedForms.length) {
+          toast.error("This copy has no editable line items.");
+        }
+        setForms(hydratedForms);
+        setLaborData(hydrateLaborDataFromCustomerCopy(response.data.result?.laborData));
+      } else {
+        toast.error(response.data.message || "Could not load customer copy");
+        navigate(`/panel/office/project/customer-copy-lists/${id}`, {
+          state: { data: formData.status },
+        });
+      }
+    } catch (error) {
+      console.error(error);
+      toast.error(error.response?.data?.message || "Could not load customer copy");
+      navigate(`/panel/office/project/customer-copy-lists/${id}`, {
+        state: { data: formData.status },
+      });
     }
   };
 
@@ -1035,17 +1078,27 @@ export default function EditCustomerFieldCopy() {
 
       formdata.append("forms", JSON.stringify(groupedForms));
 
-      const response = await axios.post(
-        `${process.env.REACT_APP_API_BASE_URL}/project/generate-customer-copy/${id}`,
-        formdata,
-        {
-          headers: headers,
-        }
-      );
+      const apiUrl = isEditLatestMode
+        ? `${process.env.REACT_APP_API_BASE_URL}/project/update-customer-copy/${id}/${entryDate}/${copyIndex}`
+        : `${process.env.REACT_APP_API_BASE_URL}/project/generate-customer-copy/${id}`;
 
-      if (response.data.statusCode === 201) {
+      const response = await axios.post(apiUrl, formdata, {
+        headers: headers,
+      });
+
+      if (
+        response.data.statusCode === 201 ||
+        (isEditLatestMode && response.data.statusCode === 200)
+      ) {
         toast.success(response.data.message);
-        navigate(-1);
+        navigate(
+          isEditLatestMode
+            ? `/panel/office/project/customer-copy-lists/${id}`
+            : -1,
+          isEditLatestMode
+            ? { state: { data: formData.status } }
+            : undefined
+        );
         return true;
       } else {
         toast.error(response.data.message);
@@ -1130,7 +1183,11 @@ export default function EditCustomerFieldCopy() {
                 }}
               >
                 <i className="fa fa-arrow-left mr-2"></i>
-              </button>{" "}Generate Customer Copy </h3>
+              </button>{" "}
+                {isEditLatestMode
+                  ? "Edit Latest Customer Copy"
+                  : "Generate Customer Copy"}{" "}
+              </h3>
             </div>
             <div className="mt-6 p-6 " id="">
               <div className="flex flex-col md:flex-row gap-6 justify-around">
@@ -2088,7 +2145,11 @@ export default function EditCustomerFieldCopy() {
                     className="btn bg-[#00613e] text-white"
                     disabled={disableBtn}
                   >
-                    {disableBtn ? "Please wait..." : "Generate Customer Copy"}
+                    {disableBtn
+                      ? "Please wait..."
+                      : isEditLatestMode
+                        ? "Update Customer Copy"
+                        : "Generate Customer Copy"}
                   </button>
                 </div>
               </form>

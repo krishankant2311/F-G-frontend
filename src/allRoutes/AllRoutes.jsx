@@ -407,6 +407,7 @@ export default function AllRoutes() {
           <Route path="/panel/office/project/customer-copy-lists/:id" element={<ViewCustomerCopyList />} />
           <Route path="/panel/office/project/field-copy/customer/:id/:entryDate/:index" element={<CustomerFieldCopyView />} />
           <Route path="/panel/office/project/field-copy/bided/:id" element={<ViewBidedFieldCopy />} />
+          <Route path="/panel/office/project/field-copy/customer/edit/:id/:entryDate/:index" element={<EditCustomerFieldCopy />} />
           <Route path="/panel/office/project/field-copy/customer/edit/:id" element={<EditCustomerFieldCopy />} />
           <Route path="/panel/office/project/field-copy/bided/edit/:id" element={<EditBidedFieldCopy />} />
           <Route path="/panel/office/project/field-copy/date" element={<ViewFieldCopyByDate />} />

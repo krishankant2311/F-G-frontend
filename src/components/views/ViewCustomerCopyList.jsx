@@ -15,7 +15,7 @@ export default function ViewCustomerCopyList() {
   const { id } = useParams();
   const navigate = useNavigate(null);
   const location = useLocation();
-  const status = location.state.data;
+  const [status, setStatus] = useState(location.state?.data ?? "");
 
   const [copyName, setCopyName] = useState("");
   const [copyDate, setCopyDate] = useState("");
@@ -23,8 +23,32 @@ export default function ViewCustomerCopyList() {
 
   useEffect(() => {
     getProjectCustomerListById();
+    if (!location.state?.data) {
+      loadProjectStatus();
+    }
     window.scrollTo(0, 0);
-  }, []);
+  }, [id]);
+
+  const loadProjectStatus = async () => {
+    try {
+      const token = localStorage.getItem("f&gstafftoken");
+      if (!token || !id) return;
+      const response = await axios.get(
+        `${process.env.REACT_APP_API_BASE_URL}/project/get-project/${id}`,
+        {
+          headers: {
+            token,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      if (response.data.statusCode === 200) {
+        setStatus(response.data.result?.status || "");
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  };
 
   const handleNameChange = (e) => {
     const val = e.target.value;
@@ -160,8 +184,11 @@ export default function ViewCustomerCopyList() {
                             </span>
                           </div>
                           {item.copyNames.map((name, index) => {
+                            const isLatest =
+                              item.customerCopies.length === index + 1 &&
+                              customerCopy.length === ind + 1;
                             return (
-                              <div className="flex items-center ml-4">
+                              <div className="flex items-center ml-4" key={`${item.entryDate}-${index}`}>
                                 <div className="top-1.5 relative font-bold">
                                   {index + 1}.{" "}
                                 </div>
@@ -176,15 +203,27 @@ export default function ViewCustomerCopyList() {
                                     {status === "Ongoing" && (
                                       <button
                                         type="button"
-                                        data-dismiss="modal"
-                                        data-toggle="modal"
-                                        data-target="#exampleModalCenter"
-                                        title="Edit Copy Name"
+                                        title={
+                                          isLatest ? "Edit latest copy" : "Edit Copy Name"
+                                        }
                                         onClick={() => {
+                                          if (isLatest) {
+                                            navigate(
+                                              `/panel/office/project/field-copy/customer/edit/${id}/${item.entryDate}/${index}`
+                                            );
+                                            return;
+                                          }
                                           setCopyIndex(index);
                                           setCopyName(name.name);
                                           setCopyDate(item.entryDate);
                                         }}
+                                        {...(!isLatest
+                                          ? {
+                                              "data-dismiss": "modal",
+                                              "data-toggle": "modal",
+                                              "data-target": "#exampleModalCenter",
+                                            }
+                                          : {})}
                                       >
                                         <i className="fa fa-edit"></i>
                                       </button>
@@ -199,12 +238,11 @@ export default function ViewCustomerCopyList() {
                                     >
                                       <i className="fa fa-eye"></i>
                                     </button>
-                                    {item.customerCopies.length == index + 1 &&
-                                      customerCopy.length === ind + 1 && (
-                                        <span className="ml-2 text-sm relative -top-0.5 tracking-wide">
-                                          (Latest)
-                                        </span>
-                                      )}
+                                    {isLatest && (
+                                      <span className="ml-2 text-sm relative -top-0.5 tracking-wide">
+                                        (Latest)
+                                      </span>
+                                    )}
                                   </div>
                                   <hr />
                                 </div>
