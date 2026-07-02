@@ -295,6 +295,7 @@ import AddNewMix from "../pages/chemicalMaintenance/Add-New-Mix";
 import Treatment from "../pages/chemicalMaintenance/Treatment";
 import TreatmentList from "../pages/chemicalMaintenance/TreatmentList";
 import CustomerSummary from "../pages/chemicalMaintenance/CustomerSummary";
+import OfficeCustomerSummary from "../pages/chemicalMaintenance/OfficeCustomerSummary";
 import AnnualProgram from "../pages/chemicalMaintenance/AnnualProgram";
 import AnnualProgramSchedule from "../pages/chemicalMaintenance/AnnualProgramSchedule";
 import ClientReconcile from "../pages/chemicalMaintenance/ClientReconcile";
@@ -433,6 +434,7 @@ export default function AllRoutes() {
           <Route path="/panel/office/chemical-maintenance/add-New-mixs" element={<AddNewMix />} />
           <Route path="/panel/office/chemical-maintenance/treatment" element={<Treatment />} />
           <Route path="/panel/office/chemical-maintenance/treatment/:customerId" element={<TreatmentList />} />
+          <Route path="/panel/office/chemical-maintenance/customer-summary" element={<OfficeCustomerSummary />} />
           <Route path="/panel/office/chemical-maintenance/treatment/:customerId/customerSummary" element={<CustomerSummary />} />
           <Route path="/panel/office/chemical-maintenance/customers/:customerId/annual-program" element={<AnnualProgram />} />
           <Route path="/panel/office/chemical-maintenance/customers/:customerId/annual-program-schedule" element={<AnnualProgramSchedule />} />

@@ -773,6 +773,36 @@ export default function StaffSidebar() {
 
               <li
                 className={`nav-item ${
+                  activeMenu === "customerSummary" ? "menu-open" : ""
+                }`}
+              >
+                <li
+                  className="nav-header cursor-pointer"
+                  onClick={() => toggleMenu("customerSummary")}
+                >
+                  <span className="text-base">
+                    <i class="nav-icon fa fa-id-card text-sm"></i>Customer Summary
+                  </span>
+                </li>
+                <ul
+                  className={`nav nav-treeview ${
+                    activeMenu === "customerSummary" ? "slide-in" : "slide-out"
+                  }`}
+                >
+                  <li className="nav-item" onClick={clearLastViewedCode}>
+                    <Link
+                      to="/panel/office/chemical-maintenance/customer-summary"
+                      className="nav-link ml-2"
+                    >
+                      <i className="fa fa-circle-o nav-icon text-sm" />
+                      <p>Customer Summary</p>
+                    </Link>
+                  </li>
+                </ul>
+              </li>
+
+              <li
+                className={`nav-item ${
                   activeMenu === "trash" ? "menu-open" : ""
                 }`}
                 
