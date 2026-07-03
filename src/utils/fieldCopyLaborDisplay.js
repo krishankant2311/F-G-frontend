@@ -495,6 +495,179 @@ export function lookupJobTypeCatalogRate(jobTypesCatalog, jobTypeLabel) {
   return 0;
 }
 
+function isCustomerCopyTaxableFlag(value) {
+  if (value === true) return true;
+  if (value === false || value == null) return false;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const v = value.trim().toLowerCase();
+    if (!v) return false;
+    if (["true", "1", "yes", "y"].includes(v)) return true;
+    if (["false", "0", "no", "n"].includes(v)) return false;
+  }
+  return Boolean(value);
+}
+
+/** Customer Copy crew labor — RT when labor or matching job-type source line is taxable. */
+function resolveCustomerCopySourceLineJobType(line) {
+  let jt = line?.jobType;
+  if (jt && typeof jt === "object") {
+    jt = jt.jobType || jt.jobName || jt.name;
+  }
+  if (!jt) jt = line?.type;
+  return jt;
+}
+
+function customerCopySourceLineJobTypeKey(line, formDataJobType) {
+  return normalizeJobTypeKey(
+    resolveFieldCopyDisplayJobType({
+      jobType: resolveCustomerCopySourceLineJobType(line),
+      formDataJobType,
+    })
+  );
+}
+
+/** Flatten grouped office/draft field-copy groups into line items with job type. */
+export function flattenGroupedFieldCopySourceLines(
+  entries,
+  groupsKey = "fieldCopies"
+) {
+  const lines = [];
+  if (!Array.isArray(entries)) return lines;
+
+  for (const entry of entries) {
+    const groups = entry?.[groupsKey];
+    if (!Array.isArray(groups)) continue;
+    for (const group of groups) {
+      const groupJt = group?.jobType || group?.type;
+      const nested = group?.copies || group?.fieldCopies;
+      if (!Array.isArray(nested)) continue;
+      for (const item of nested) {
+        lines.push({
+          ...item,
+          jobType: item?.jobType || item?.type || groupJt,
+          type: item?.type || groupJt,
+        });
+      }
+    }
+  }
+
+  return lines;
+}
+
+function customerCopyHasTaxableSourceForJobType(
+  laborKey,
+  lines,
+  formDataJobType
+) {
+  if (!laborKey || !Array.isArray(lines)) return false;
+
+  for (const line of lines) {
+    if (
+      customerCopySourceLineJobTypeKey(line, formDataJobType) !== laborKey
+    ) {
+      continue;
+    }
+    if (isCustomerCopyTaxableFlag(line?.isTaxable ?? line?.isLaborTaxable)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function customerCopyHasTaxableLaborSourceLine(
+  laborJobType,
+  lines,
+  formDataJobType
+) {
+  if (!Array.isArray(lines)) return false;
+
+  const laborSource = findLaborSourceLine(lines, laborJobType);
+  if (
+    laborSource &&
+    isCustomerCopyTaxableFlag(
+      laborSource?.isTaxable ?? laborSource?.isLaborTaxable
+    )
+  ) {
+    return true;
+  }
+
+  const laborKey = customerCopySourceLineJobTypeKey(
+    { jobType: laborJobType },
+    formDataJobType
+  );
+  if (!laborKey) return false;
+
+  const standard = getStandardJobTypeLaborLabel(
+    resolveFieldCopyDisplayJobType({
+      jobType: laborJobType,
+      formDataJobType,
+    })
+  );
+
+  for (const line of lines) {
+    if (String(line?.source || "") !== "Labor") continue;
+    if (
+      !isCustomerCopyTaxableFlag(line?.isTaxable ?? line?.isLaborTaxable)
+    ) {
+      continue;
+    }
+    if (customerCopySourceLineJobTypeKey(line, formDataJobType) === laborKey) {
+      return true;
+    }
+    if (standard) {
+      const base = getCustomerCopyInvoiceDescriptionBase({
+        ...line,
+        dataType: "Material",
+        source: "Labor",
+        jobType: resolveCustomerCopySourceLineJobType(line) || laborJobType,
+      });
+      if (base === standard) return true;
+    }
+  }
+
+  return false;
+}
+
+export function resolveCustomerCopyCrewLaborTaxable(
+  labor,
+  fieldCopies,
+  formDataJobType,
+  extraSources = {}
+) {
+  if (isCustomerCopyTaxableFlag(labor?.isLaborTaxable ?? labor?.isTaxable)) {
+    return true;
+  }
+
+  const laborKey = customerCopySourceLineJobTypeKey(labor, formDataJobType);
+  if (!laborKey) return false;
+
+  const sourceLines = [
+    ...(fieldCopies || []),
+    ...(extraSources.materialData || []),
+    ...flattenGroupedFieldCopySourceLines(extraSources.officeFieldCopy),
+    ...flattenGroupedFieldCopySourceLines(
+      (extraSources.draftCopy || []).map((d) => ({
+        fieldCopies: d?.draftCopies,
+      }))
+    ),
+  ];
+
+  return customerCopyHasTaxableSourceForJobType(
+    laborKey,
+    sourceLines,
+    formDataJobType
+  ) ||
+    customerCopyHasTaxableLaborSourceLine(
+      labor?.jobType,
+      sourceLines,
+      formDataJobType
+    ) ||
+    (extraSources.taxableJobTypeKeys instanceof Set &&
+      extraSources.taxableJobTypeKeys.has(laborKey));
+}
+
 /** Prefer primary map values; fill missing keys from fallback. */
 export function mergeLaborMapMissingKeys(primary, fallback) {
   const out = { ...(primary || {}) };
@@ -924,6 +1097,12 @@ export function mergeCustomerCopyInvoiceSummaryRows(rows) {
       if (row.totalCost != null) {
         existing.totalCost =
           (Number(existing.totalCost) || 0) + (Number(row.totalCost) || 0);
+      }
+      if (
+        isCustomerCopyTaxableFlag(row?.isLaborTaxable ?? row?.isTaxable)
+      ) {
+        existing.isLaborTaxable = true;
+        existing.isTaxable = true;
       }
       continue;
     }

@@ -1,16 +1,18 @@
 import React, { useEffect, useState } from "react";
 import {
-  formatPreviewMoney,
-  getMaterialDisplayName,
+  applyPreviewMaterialRowFieldChange,
+  getMaterialNameInputValue,
   mergeAllDuplicateMaterials,
   unmergeAllMaterials,
 } from "../../../utils/customerCopyMaterialMerge";
 
-const fieldClass = "border-b border-[grey] outline-none w-full bg-gray-50 px-1 py-1";
+const fieldClass =
+  "border border-gray-300 outline-none w-full bg-white px-1 py-1 rounded-sm";
 
 export default function CustomerSalesOrderPreviewModal({
   show,
   materialRows,
+  jobTypes = [],
   onClose,
   onGenerateMergeCopy,
   isGenerating = false,
@@ -43,9 +45,21 @@ export default function CustomerSalesOrderPreviewModal({
     await onGenerateMergeCopy?.(previewRows);
   };
 
+  const handlePreviewFieldChange = (index, name, value) => {
+    setPreviewRows((rows) => {
+      const next = [...rows];
+      next[index] = applyPreviewMaterialRowFieldChange(next[index], name, value);
+      return next;
+    });
+  };
+
   const stopModalEvent = (event) => {
     event.stopPropagation();
   };
+
+  const activeJobTypes = jobTypes.filter(
+    (item) => item.status === "Active" || item.status === "Delete"
+  );
 
   return (
     <div
@@ -83,19 +97,49 @@ export default function CustomerSalesOrderPreviewModal({
                 <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
                   <div>
                     <label className="font-semibold text-sm">Source *</label>
-                    <input
+                    <select
                       className={fieldClass}
                       value={row.source || ""}
-                      readOnly
-                    />
+                      onChange={(e) =>
+                        handlePreviewFieldChange(index, "source", e.target.value)
+                      }
+                    >
+                      <option value="F&G">F&amp;G</option>
+                      <option value="Other">Other</option>
+                    </select>
                   </div>
                   <div>
                     <label className="font-semibold text-sm">Material Type *</label>
-                    <input
-                      className={fieldClass}
-                      value={row.type || ""}
-                      readOnly
-                    />
+                    {activeJobTypes.length > 0 ? (
+                      <select
+                        className={fieldClass}
+                        value={row.type || ""}
+                        onChange={(e) =>
+                          handlePreviewFieldChange(index, "type", e.target.value)
+                        }
+                      >
+                        <option value="">Select</option>
+                        {activeJobTypes.map((item) => (
+                          <option
+                            key={item._id || item.jobName}
+                            value={item.jobName}
+                            className={
+                              item.status === "Delete" ? "text-red-600" : "text-black"
+                            }
+                          >
+                            {item.jobName}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        className={fieldClass}
+                        value={row.type || ""}
+                        onChange={(e) =>
+                          handlePreviewFieldChange(index, "type", e.target.value)
+                        }
+                      />
+                    )}
                   </div>
                   {row.source === "Other" && (
                     <div>
@@ -103,7 +147,9 @@ export default function CustomerSalesOrderPreviewModal({
                       <input
                         className={fieldClass}
                         value={row.vendorName || ""}
-                        readOnly
+                        onChange={(e) =>
+                          handlePreviewFieldChange(index, "vendorName", e.target.value)
+                        }
                       />
                     </div>
                   )}
@@ -111,8 +157,10 @@ export default function CustomerSalesOrderPreviewModal({
                     <label className="font-semibold text-sm">Material Name *</label>
                     <input
                       className={fieldClass}
-                      value={getMaterialDisplayName(row)}
-                      readOnly
+                      value={getMaterialNameInputValue(row)}
+                      onChange={(e) =>
+                        handlePreviewFieldChange(index, "reference", e.target.value)
+                      }
                     />
                   </div>
                   <div>
@@ -120,23 +168,35 @@ export default function CustomerSalesOrderPreviewModal({
                     <input
                       className={fieldClass}
                       value={row.measure || ""}
-                      readOnly
+                      onChange={(e) =>
+                        handlePreviewFieldChange(index, "measure", e.target.value)
+                      }
                     />
                   </div>
                   <div>
                     <label className="font-semibold text-sm">Quantity *</label>
                     <input
+                      type="number"
+                      min="0"
+                      step="0.01"
                       className={fieldClass}
                       value={row.quantity ?? ""}
-                      readOnly
+                      onChange={(e) =>
+                        handlePreviewFieldChange(index, "quantity", e.target.value)
+                      }
                     />
                   </div>
                   <div>
                     <label className="font-semibold text-sm">Cost *</label>
                     <input
+                      type="number"
+                      min="0"
+                      step="0.01"
                       className={fieldClass}
-                      value={formatPreviewMoney(row.cost)}
-                      readOnly
+                      value={row.cost ?? ""}
+                      onChange={(e) =>
+                        handlePreviewFieldChange(index, "cost", e.target.value)
+                      }
                     />
                   </div>
                   <div>
@@ -144,38 +204,58 @@ export default function CustomerSalesOrderPreviewModal({
                       {row.source === "Other" ? "Mark up" : "Markup *"}
                     </label>
                     <input
+                      type="number"
+                      min="0"
+                      step="0.01"
                       className={fieldClass}
                       value={row.markup ?? row.markUp ?? ""}
-                      readOnly
+                      onChange={(e) =>
+                        handlePreviewFieldChange(index, "markup", e.target.value)
+                      }
                     />
                   </div>
                   <div>
                     <label className="font-semibold text-sm">Price *</label>
                     <input
+                      type="number"
+                      min="0"
+                      step="0.01"
                       className={fieldClass}
-                      value={formatPreviewMoney(row.price)}
-                      readOnly
+                      value={row.price ?? ""}
+                      onChange={(e) =>
+                        handlePreviewFieldChange(index, "price", e.target.value)
+                      }
                     />
                   </div>
                   <div>
                     <label className="font-semibold text-sm">Total Price *</label>
                     <input
+                      type="number"
+                      min="0"
+                      step="0.01"
                       className={fieldClass}
-                      value={formatPreviewMoney(row.totalPrice)}
-                      readOnly
+                      value={row.totalPrice ?? ""}
+                      onChange={(e) =>
+                        handlePreviewFieldChange(index, "totalPrice", e.target.value)
+                      }
                     />
                   </div>
                   <div>
                     <label className="font-semibold text-sm">Taxable</label>
-                    <input
+                    <select
                       className={fieldClass}
                       value={
                         row.isTaxable === true || row.isTaxable === "true"
-                          ? "Yes"
-                          : "No"
+                          ? "true"
+                          : "false"
                       }
-                      readOnly
-                    />
+                      onChange={(e) =>
+                        handlePreviewFieldChange(index, "isTaxable", e.target.value)
+                      }
+                    >
+                      <option value="true">Yes</option>
+                      <option value="false">No</option>
+                    </select>
                   </div>
                   {row.source === "Other" && (
                     <>
@@ -184,7 +264,9 @@ export default function CustomerSalesOrderPreviewModal({
                         <input
                           className={fieldClass}
                           value={row.invoice || ""}
-                          readOnly
+                          onChange={(e) =>
+                            handlePreviewFieldChange(index, "invoice", e.target.value)
+                          }
                         />
                       </div>
                       <div>
@@ -192,7 +274,9 @@ export default function CustomerSalesOrderPreviewModal({
                         <input
                           className={fieldClass}
                           value={row.PO || ""}
-                          readOnly
+                          onChange={(e) =>
+                            handlePreviewFieldChange(index, "PO", e.target.value)
+                          }
                         />
                       </div>
                     </>

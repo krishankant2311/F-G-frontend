@@ -13,16 +13,23 @@ import {
   fetchActiveMaterials,
   getOtherTreatmentSelectionKey,
   MATERIAL_OPTION_PREFIX,
-  resolveMaterialUnitCost,
-  resolveMaterialUnitPrice,
 } from "../../../../../utils/otherTreatmentDropdown";
 import {
   EMPTY_OTHER_TREATMENT_ROW,
   applyOtherTreatmentSelection,
   buildChemicalOtherTreatmentDropdownOptions,
   buildMaterialOtherTreatmentDropdownOptions,
+  cloneOtherTreatmentFormRow,
   formatOtherTreatmentRowsForApi,
+  getOtherTreatmentIdentityKey,
+  hasValidOtherTreatmentDate,
+  isActiveOtherTreatmentEntry,
   isChemicalOtherTreatment,
+  mergeFormOtherTreatmentsIntoList,
+  otherTreatmentFormRowIsReady,
+  resolveOtherTreatmentDate,
+  resolveOtherTreatmentName,
+  resolveOtherTreatmentQuantity,
   scheduleItemAppliesLabor,
 } from "../../../../../utils/otherTreatmentCategory";
 
@@ -34,6 +41,7 @@ const CustomerAnnualProgramSchedule = () => {
 
   // When navigated without state (e.g. from Completed Treatments), fetch customer and build state
   const [fetchedState, setFetchedState] = useState(null);
+  const [refreshedState, setRefreshedState] = useState(null);
   const [stateLoading, setStateLoading] = useState(false);
   useEffect(() => {
     if (locationState != null) {
@@ -73,7 +81,7 @@ const CustomerAnnualProgramSchedule = () => {
       .finally(() => setStateLoading(false));
   }, [paramCustomerId, locationState]);
 
-  const state = locationState || fetchedState;
+  const state = refreshedState || locationState || fetchedState;
 
   // calendar popup states
   const [openIndex, setOpenIndex] = useState(null);
@@ -170,6 +178,7 @@ const CustomerAnnualProgramSchedule = () => {
   const [editData, setEditData] = useState(null);
   const [showBalanceWarning, setShowBalanceWarning] = useState(false);
   const [pendingUpdatePayload, setPendingUpdatePayload] = useState(null);
+  const [pendingUpdateFallbackCustomer, setPendingUpdateFallbackCustomer] = useState(null);
   const [pendingRemainingAmount, setPendingRemainingAmount] = useState(0);
   const SCHEDULE_DATE_PAST_TOAST_ID = "schedule-date-past";
   const SCHEDULE_ERROR_TOAST_ID = "annual-schedule-error";
@@ -334,19 +343,19 @@ const CustomerAnnualProgramSchedule = () => {
         });
       });
 
-      // Other: qty/projectCode/date keyed by other index
-      (otherTreatments || [])
-        .filter((ot) => ot.date)
-        .forEach((ot, originalIndex) => {
-          const key = `other-${originalIndex}`;
-          const formattedDate = formatDateForInput(ot.date);
-          if (formattedDate) initialDates[key] = formattedDate;
-          if (ot.projectCode) initialProjectCodes[key] = ot.projectCode;
-          const q = ot.qty ?? ot.quantity;
-          if (q !== undefined && q !== null && q !== "") {
-            initialRowQty[key] = String(wholeQuantity(q));
-          }
-        });
+      // Other: qty/projectCode/date keyed by other index in full otherTreatments array
+      (otherTreatments || []).forEach((ot, originalIndex) => {
+        const resolvedDate = resolveOtherTreatmentDate(ot);
+        if (!hasValidOtherTreatmentDate(resolvedDate)) return;
+        const key = `other-${originalIndex}`;
+        const formattedDate = formatDateForInput(resolvedDate);
+        if (formattedDate) initialDates[key] = formattedDate;
+        if (ot.projectCode) initialProjectCodes[key] = ot.projectCode;
+        const q = resolveOtherTreatmentQuantity(ot);
+        if (q > 0) {
+          initialRowQty[key] = String(wholeQuantity(q));
+        }
+      });
       
       if (Object.keys(initialDates).length > 0) setDates(initialDates);
       if (Object.keys(initialProjectCodes).length > 0) setProjectCodes(initialProjectCodes);
@@ -443,125 +452,28 @@ const CustomerAnnualProgramSchedule = () => {
   });
 
   // Build schedule data from other treatments (from state - already saved)
-  const otherScheduleDataFromState = (otherTreatments || [])
-    .filter((ot) => ot.date)
-    .map((ot, index) => {
-      const qty = wholeQuantity(ot.qty ?? ot.quantity ?? 0);
-      const costPerTank = Number(ot.totalCostPerTank || 0);
-      const pricePerTank = Number(ot.totalPricePerTank || 0);
-      
-      return {
-        treatment: ot.treatment || ot.mixName || "",
-        quantity: qty,
-        scheduledDate: ot.date,
-        price: qty * pricePerTank,
-        cost: qty * costPerTank,
-        unitPrice: pricePerTank,
-        unitCost: costPerTank,
-        projectCode: ot.projectCode || "",
-        type: "other",
-        originalIndex: index,
-        isChemicalTreatment: isChemicalOtherTreatment(ot),
-      };
-    });
+  const otherScheduleDataFromState = (otherTreatments || []).flatMap((ot, originalIndex) => {
+    const resolvedDate = resolveOtherTreatmentDate(ot);
+    if (!hasValidOtherTreatmentDate(resolvedDate)) return [];
 
-  // Build schedule data from OTHER TREATMENTS section (newly added in this page)
-  const resolveOtherFormRowPricing = (ot) => {
-    if (ot?.materialData) {
-      const defaultCost = resolveMaterialUnitCost(ot.materialData);
-      const defaultPrice = resolveMaterialUnitPrice(ot.materialData, false);
-      const unitCost =
-        ot.cost !== "" && ot.cost != null ? Number(ot.cost) : defaultCost;
-      const unitPrice =
-        ot.price !== "" && ot.price != null ? Number(ot.price) : defaultPrice;
-      return { unitCost, unitPrice, costPerTank: unitCost, pricePerTank: unitPrice };
-    }
-    if (ot?.catalogData) {
-      const defaultCost = Number(ot.catalogData.cost || 0);
-      const defaultPrice = maintenanceEnabledNormalized
-        ? Number(ot.catalogData.lowerPrice ?? ot.catalogData.price ?? 0)
-        : Number(ot.catalogData.price ?? 0);
-      const unitCost =
-        ot.cost !== "" && ot.cost != null ? Number(ot.cost) : defaultCost;
-      const unitPrice =
-        ot.price !== "" && ot.price != null ? Number(ot.price) : defaultPrice;
-      return { unitCost, unitPrice, costPerTank: unitCost, pricePerTank: unitPrice };
-    }
-    if (ot?.mixData) {
-      const defaultCost = Number(ot.mixData.totalCostPerTank || 0);
-      const defaultPrice = maintenanceEnabledNormalized
-        ? defaultCost
-        : Number(ot.mixData.totalPricePerTank || 0);
-      const unitCost =
-        ot.cost !== "" && ot.cost != null ? Number(ot.cost) : defaultCost;
-      const unitPrice =
-        ot.price !== "" && ot.price != null ? Number(ot.price) : defaultPrice;
-      return { unitCost, unitPrice, costPerTank: unitCost, pricePerTank: unitPrice };
-    }
-    const costPerTank = Number(ot?.cost) || 0;
-    const pricePerTank = Number(ot?.price) || 0;
-    return { unitCost: costPerTank, unitPrice: pricePerTank, costPerTank, pricePerTank };
-  };
+    const qty = wholeQuantity(resolveOtherTreatmentQuantity(ot));
+    const costPerTank = Number(ot.totalCostPerTank || 0);
+    const pricePerTank = Number(ot.totalPricePerTank || 0);
 
-  const otherScheduleDataFromForm = newOtherTreatments
-    .filter((ot) => {
-      const ds = Array.isArray(ot.scheduledDates)
-        ? ot.scheduledDates
-        : (ot.scheduledDate ? [ot.scheduledDate] : []);
-      return ot.treatment && ds.length > 0;
-    })
-    .flatMap((ot, index) => {
-      const qty = wholeQuantity(ot.quantity || 0);
-      const { costPerTank, pricePerTank, unitCost } = resolveOtherFormRowPricing(ot);
-      const ds = Array.isArray(ot.scheduledDates)
-        ? ot.scheduledDates
-        : (ot.scheduledDate ? [ot.scheduledDate] : []);
-      const uniqDates = Array.from(new Set(ds.filter(Boolean)));
-
-      return uniqDates.map((d) => ({
-        treatment: ot.treatment,
-        quantity: qty,
-        scheduledDate: d,
-        price: qty * pricePerTank,
-        cost: qty * costPerTank,
-        unitPrice: pricePerTank,
-        unitCost,
-        projectCode: "",
-        type: "other-new",
-        originalIndex: index,
-        isChemicalTreatment: false,
-      }));
-    });
-
-  const otherChemicalScheduleDataFromForm = newOtherChemicalTreatments
-    .filter((ot) => {
-      const ds = Array.isArray(ot.scheduledDates)
-        ? ot.scheduledDates
-        : (ot.scheduledDate ? [ot.scheduledDate] : []);
-      return ot.treatment && ds.length > 0;
-    })
-    .flatMap((ot, index) => {
-      const qty = wholeQuantity(ot.quantity || 0);
-      const { costPerTank, pricePerTank, unitCost } = resolveOtherFormRowPricing(ot);
-      const ds = Array.isArray(ot.scheduledDates)
-        ? ot.scheduledDates
-        : (ot.scheduledDate ? [ot.scheduledDate] : []);
-      const uniqDates = Array.from(new Set(ds.filter(Boolean)));
-
-      return uniqDates.map((d) => ({
-        treatment: ot.treatment,
-        quantity: qty,
-        scheduledDate: d,
-        price: qty * pricePerTank,
-        cost: qty * costPerTank,
-        unitPrice: pricePerTank,
-        unitCost,
-        projectCode: "",
-        type: "other-chemical-new",
-        originalIndex: index,
-        isChemicalTreatment: true,
-      }));
-    });
+    return [{
+      treatment: resolveOtherTreatmentName(ot),
+      quantity: qty,
+      scheduledDate: resolvedDate,
+      price: qty * pricePerTank,
+      cost: qty * costPerTank,
+      unitPrice: pricePerTank,
+      unitCost: costPerTank,
+      projectCode: ot.projectCode || "",
+      type: "other",
+      originalIndex,
+      isChemicalTreatment: isChemicalOtherTreatment(ot),
+    }];
+  });
 
   // Extra annual rows added from duplicate (+) action in schedule table.
   // These rows share qty/projectCode with their base annual treatment but carry
@@ -621,12 +533,10 @@ const CustomerAnnualProgramSchedule = () => {
     return output;
   })();
 
-  // Combine all scheduled treatments
+  // Program table: saved schedule only — OTHER TREATMENTS form rows appear after Update
   const scheduledTreatments = [
     ...annualRowsWithInsertedDuplicates,
     ...otherScheduleDataFromState,
-    ...otherScheduleDataFromForm,
-    ...otherChemicalScheduleDataFromForm,
   ];
 
   // ✅ total (price total) - recalculate based on current quantities
@@ -895,8 +805,64 @@ const CustomerAnnualProgramSchedule = () => {
     }
   };
 
-  // 🔹 submit - only updates ANNUAL PROGRAM SCHEDULE (no new treatments added from OTHER TREATMENTS)
-  const executeCustomerUpdate = async (payload) => {
+  const rebuildScheduleUiFromCustomer = (customerData) => {
+    const nextState = {
+      customerName: customerData.customerName || "",
+      customerId: customerData._id || customerData.customerId || paramCustomerId,
+      description: customerData.description || "",
+      contractTotal: customerData.contractTotal ?? 0,
+      isChemicalMaintenanceEnabled: !!customerData.isChemicalMaintenanceEnabled,
+      treatments: [],
+      annualTreatments: customerData.annualTreatments || [],
+      otherTreatments: customerData.otherTreatments || [],
+    };
+
+    const initialDates = {};
+    const initialProjectCodes = {};
+    const initialRowQty = {};
+
+    (nextState.annualTreatments || []).forEach((at, originalIndex) => {
+      const qtyKey = `annual-${originalIndex}`;
+      if (at.projectCode) initialProjectCodes[qtyKey] = at.projectCode;
+      if (at.quantity !== undefined && at.quantity !== null && at.quantity !== "") {
+        initialRowQty[qtyKey] = String(wholeQuantity(at.quantity));
+      }
+
+      const ds =
+        Array.isArray(at.scheduleDates) && at.scheduleDates.length > 0
+          ? at.scheduleDates
+          : at.scheduleDate
+            ? [at.scheduleDate]
+            : [];
+      ds.forEach((d, dateIndex) => {
+        const formatted = formatDateForInput(d);
+        if (formatted) initialDates[`annual-${originalIndex}-${dateIndex}`] = formatted;
+      });
+    });
+
+    (nextState.otherTreatments || []).forEach((ot, originalIndex) => {
+      const resolvedDate = resolveOtherTreatmentDate(ot);
+      if (!hasValidOtherTreatmentDate(resolvedDate)) return;
+      const key = `other-${originalIndex}`;
+      const formattedDate = formatDateForInput(resolvedDate);
+      if (formattedDate) initialDates[key] = formattedDate;
+      if (ot.projectCode) initialProjectCodes[key] = ot.projectCode;
+      const q = resolveOtherTreatmentQuantity(ot);
+      if (q > 0) {
+        initialRowQty[key] = String(wholeQuantity(q));
+      }
+    });
+
+    setRefreshedState(nextState);
+    setDates(initialDates);
+    setProjectCodes(initialProjectCodes);
+    setRowQty(initialRowQty);
+    setNewOtherTreatments([emptyOtherFormRow()]);
+    setNewOtherChemicalTreatments([emptyOtherFormRow()]);
+    setAdditionalAnnualRows([]);
+  };
+
+  const executeCustomerUpdate = async (payload, { fallbackCustomer } = {}) => {
     const token = localStorage.getItem("f&gstafftoken");
     if (!token) {
       toast.error("Authentication token not found", { toastId: SCHEDULE_ERROR_TOAST_ID });
@@ -918,7 +884,45 @@ const CustomerAnnualProgramSchedule = () => {
 
     if (updateRes.data.success) {
       toast.success("Schedule updated successfully", { toastId: SCHEDULE_SUCCESS_TOAST_ID });
-      navigate("/panel/office/chemical-maintenance/manage-customer", { replace: true });
+
+      const customerForUi = {
+        ...(fallbackCustomer || {}),
+        ...(updateRes.data.data || {}),
+        _id: updateRes.data.data?._id || fallbackCustomer?._id || customerId,
+        customerName:
+          payload.customerName ??
+          updateRes.data.data?.customerName ??
+          fallbackCustomer?.customerName,
+        customerEmail:
+          payload.customerEmail ??
+          updateRes.data.data?.customerEmail ??
+          fallbackCustomer?.customerEmail,
+        customerPhone:
+          payload.customerPhone ??
+          updateRes.data.data?.customerPhone ??
+          fallbackCustomer?.customerPhone,
+        jobAddress:
+          payload.jobAddress ??
+          updateRes.data.data?.jobAddress ??
+          fallbackCustomer?.jobAddress,
+        contractTotal:
+          updateRes.data.data?.contractTotal ??
+          fallbackCustomer?.contractTotal ??
+          0,
+        description:
+          updateRes.data.data?.description ?? fallbackCustomer?.description ?? "",
+        isChemicalMaintenanceEnabled:
+          payload.isChemicalMaintenanceEnabled ??
+          updateRes.data.data?.isChemicalMaintenanceEnabled ??
+          fallbackCustomer?.isChemicalMaintenanceEnabled,
+        // Always show exactly what we saved — do not let refetch drop new rows.
+        annualTreatments:
+          payload.annualTreatments ?? updateRes.data.data?.annualTreatments ?? [],
+        otherTreatments:
+          payload.otherTreatments ?? updateRes.data.data?.otherTreatments ?? [],
+      };
+
+      rebuildScheduleUiFromCustomer(customerForUi);
       return true;
     }
 
@@ -931,10 +935,13 @@ const CustomerAnnualProgramSchedule = () => {
     submitLockRef.current = true;
     setIsSubmitting(true);
     try {
-      const ok = await executeCustomerUpdate(pendingUpdatePayload);
+      const ok = await executeCustomerUpdate(pendingUpdatePayload, {
+        fallbackCustomer: pendingUpdateFallbackCustomer,
+      });
       if (ok) {
         setShowBalanceWarning(false);
         setPendingUpdatePayload(null);
+        setPendingUpdateFallbackCustomer(null);
       }
     } catch (error) {
       console.error("Proceed low balance submit error:", error);
@@ -949,6 +956,14 @@ const CustomerAnnualProgramSchedule = () => {
     if (submitLockRef.current || isSubmitting) return;
     submitLockRef.current = true;
     setIsSubmitting(true);
+
+    // Snapshot form rows before any await so async save cannot lose in-progress entries.
+    const formOtherRowsSnapshot = newOtherTreatments.map(cloneOtherTreatmentFormRow);
+    const formOtherChemicalRowsSnapshot = newOtherChemicalTreatments.map(
+      cloneOtherTreatmentFormRow
+    );
+    const savedOtherTreatmentsSnapshot = (otherTreatments || []).map((row) => ({ ...row }));
+
     try {
       // Validate ANNUAL TREATMENTS - check if quantity is filled but date is missing
       const incompleteAnnualTreatments = scheduledTreatments.filter((st, index) => {
@@ -970,17 +985,18 @@ const CustomerAnnualProgramSchedule = () => {
 
       const validateOtherFormSection = (rows, label) => {
         const incomplete = rows.filter((ot) => {
-          const ds = Array.isArray(ot.scheduledDates)
-            ? ot.scheduledDates
-            : ot.scheduledDate
-              ? [ot.scheduledDate]
-              : [];
-          const hasTreatment = ot.treatment?.trim();
-          return hasTreatment && ds.length === 0;
+          const hasSelection = Boolean(
+            String(ot.treatment || "").trim() ||
+            ot.materialData ||
+            ot.mixData ||
+            ot.catalogData ||
+            (ot.treatment === "Other" && String(ot.treatmentName || "").trim())
+          );
+          return hasSelection && !otherTreatmentFormRowIsReady(ot);
         });
         if (incomplete.length > 0) {
           toast.error(
-            `Please fill Scheduled Date for all selected treatments in ${label} before updating`,
+            `Please fill Quantity and Scheduled Date for all selected treatments in ${label} before updating`,
             { toastId: SCHEDULE_ERROR_TOAST_ID }
           );
           return false;
@@ -988,12 +1004,12 @@ const CustomerAnnualProgramSchedule = () => {
         return true;
       };
 
-      if (!validateOtherFormSection(newOtherTreatments, "OTHER TREATMENTS")) {
+      if (!validateOtherFormSection(formOtherRowsSnapshot, "OTHER TREATMENTS")) {
         submitLockRef.current = false;
         setIsSubmitting(false);
         return;
       }
-      if (!validateOtherFormSection(newOtherChemicalTreatments, "OTHER CHEMICAL TREATMENTS")) {
+      if (!validateOtherFormSection(formOtherChemicalRowsSnapshot, "OTHER CHEMICAL TREATMENTS")) {
         submitLockRef.current = false;
         setIsSubmitting(false);
         return;
@@ -1136,8 +1152,9 @@ const CustomerAnnualProgramSchedule = () => {
         });
       });
 
-      // Update existing other treatments with dates, quantities, and project codes
-      const updatedExistingOtherTreatments = (currentCustomer.otherTreatments || []).map((ot, index) => {
+      // Update existing other treatments from what the table already shows (state),
+      // not only what the GET returned — indices must match scheduledTreatments.
+      const updatedExistingOtherTreatments = savedOtherTreatmentsSnapshot.map((ot, index) => {
         const updates = otherTreatmentUpdates[index];
         
         // If no updates for this treatment, return as is
@@ -1147,7 +1164,7 @@ const CustomerAnnualProgramSchedule = () => {
 
         const updatedDate = (updates.date !== undefined && updates.date !== null && updates.date !== "") 
           ? updates.date 
-          : ot.date;
+          : resolveOtherTreatmentDate(ot);
         
         const updatedQty = (updates.qty !== undefined && updates.qty !== null && updates.qty !== "")
           ? wholeQuantity(updates.qty)
@@ -1160,6 +1177,7 @@ const CustomerAnnualProgramSchedule = () => {
         const updatedTreatment = {
           ...ot,
           date: updatedDate,
+          scheduleDate: updatedDate,
           qty: updatedQty,
           projectCode: updatedProjectCode,
           status: ot.status || "Scheduled",
@@ -1175,43 +1193,60 @@ const CustomerAnnualProgramSchedule = () => {
       });
 
       const formattedNewOtherTreatments = [
-        ...formatOtherTreatmentRowsForApi(newOtherTreatments, {
+        ...formatOtherTreatmentRowsForApi(formOtherRowsSnapshot, {
           isChemicalSection: false,
           isChemicalMaintenanceEnabled: maintenanceEnabledNormalized,
           toQuantity: wholeQuantity,
         }),
-        ...formatOtherTreatmentRowsForApi(newOtherChemicalTreatments, {
+        ...formatOtherTreatmentRowsForApi(formOtherChemicalRowsSnapshot, {
           isChemicalSection: true,
           isChemicalMaintenanceEnabled: maintenanceEnabledNormalized,
           toQuantity: wholeQuantity,
         }),
       ];
 
+      console.log("Form other rows snapshot:", formOtherRowsSnapshot);
       console.log("New other treatments to add:", formattedNewOtherTreatments);
 
-      // Filter out soft-deleted treatments (qty=0, date=null) before checking duplicates
-      const activeOtherTreatments = updatedExistingOtherTreatments.filter((ot) => {
-        const qty = Number(ot.qty || 0);
-        const hasDate = ot.date != null;
-        return qty > 0 || hasDate; // Keep if has quantity OR date (not soft-deleted)
-      });
+      const hasReadyFormOther = [...formOtherRowsSnapshot, ...formOtherChemicalRowsSnapshot].some(
+        otherTreatmentFormRowIsReady
+      );
+      if (hasReadyFormOther && formattedNewOtherTreatments.length === 0) {
+        toast.error(
+          "Could not save OTHER TREATMENTS row. Please re-select treatment, quantity, and date.",
+          { toastId: SCHEDULE_ERROR_TOAST_ID }
+        );
+        submitLockRef.current = false;
+        setIsSubmitting(false);
+        return;
+      }
 
-      // Check for duplicates: same treatment name (ignore date - if same treatment exists, update it instead of creating new)
-      const trulyNewOtherTreatments = formattedNewOtherTreatments.filter((newOt) => {
-        const existsInOtherTreatments = activeOtherTreatments.some((existingOt) => {
-          const treatmentMatch = (existingOt.treatment || existingOt.mixName) === (newOt.treatment || newOt.mixName);
-          return treatmentMatch; // Same treatment name = duplicate (update existing, don't create new)
-        });
-        return !existsInOtherTreatments; // Add only if treatment name doesn't exist
-      });
+      // Drop placeholder rows; merge form rows (same treatment + same date updates, new date adds row)
+      const activeOtherTreatments = updatedExistingOtherTreatments.filter(isActiveOtherTreatmentEntry);
+      const scheduledOtherBeforeMerge = activeOtherTreatments.filter((ot) =>
+        hasValidOtherTreatmentDate(resolveOtherTreatmentDate(ot))
+      ).length;
 
-      console.log("Truly new other treatments (after duplicate check):", trulyNewOtherTreatments);
+      let updatedOtherTreatments = mergeFormOtherTreatmentsIntoList(
+        activeOtherTreatments,
+        formattedNewOtherTreatments
+      );
 
-      // Combine active other treatments with only new ones (no duplicates)
-      const updatedOtherTreatments = [
-        ...activeOtherTreatments,
-        ...trulyNewOtherTreatments,
-      ];
+      const scheduledOtherAfterMerge = updatedOtherTreatments.filter((ot) =>
+        hasValidOtherTreatmentDate(resolveOtherTreatmentDate(ot))
+      ).length;
+
+      if (hasReadyFormOther && scheduledOtherAfterMerge <= scheduledOtherBeforeMerge) {
+        toast.error(
+          "OTHER TREATMENTS row was not added. Please select treatment, enter quantity greater than 0, and pick a schedule date.",
+          { toastId: SCHEDULE_ERROR_TOAST_ID }
+        );
+        submitLockRef.current = false;
+        setIsSubmitting(false);
+        return;
+      }
+
+      console.log("Merged other treatments after form save:", updatedOtherTreatments);
 
       // Update customer
       const updatePayload = {
@@ -1237,7 +1272,7 @@ const CustomerAnnualProgramSchedule = () => {
         .reduce((sum, at) => sum + toSafeNumber(at.price), 0);
 
       const scheduledOtherAmount = (updatedOtherTreatments || [])
-        .filter((ot) => ot.date)
+        .filter((ot) => hasValidOtherTreatmentDate(resolveOtherTreatmentDate(ot)))
         .reduce((sum, ot) => {
           const qty = toSafeNumber(ot.qty);
           const pricePerTank = toSafeNumber(ot.totalPricePerTank);
@@ -1268,6 +1303,7 @@ const CustomerAnnualProgramSchedule = () => {
           remainingAmount,
         });
         setPendingUpdatePayload(updatePayload);
+        setPendingUpdateFallbackCustomer(currentCustomer);
         setPendingRemainingAmount(remainingAmount);
         setShowBalanceWarning(true);
         submitLockRef.current = false;
@@ -1276,7 +1312,7 @@ const CustomerAnnualProgramSchedule = () => {
       }
 
       console.log("Update payload:", JSON.stringify(updatePayload, null, 2));
-      await executeCustomerUpdate(updatePayload);
+      await executeCustomerUpdate(updatePayload, { fallbackCustomer: currentCustomer });
     } catch (error) {
       console.error("Submit schedule error:", error);
       toast.error(error.response?.data?.message || error.message || "Something went wrong", { toastId: SCHEDULE_ERROR_TOAST_ID });
@@ -2214,9 +2250,11 @@ const CustomerAnnualProgramSchedule = () => {
                     if (at.quantity !== undefined && at.quantity !== null && at.quantity !== "") qtyMap[idx] = at.quantity;
                     idx++;
                   });
-                  (fresh.otherTreatments || []).filter((ot) => ot.date).forEach((ot) => {
-                    const q = ot.qty ?? ot.quantity;
-                    if (q !== undefined && q !== null && q !== "") qtyMap[idx] = q;
+                  (fresh.otherTreatments || [])
+                    .filter((ot) => hasValidOtherTreatmentDate(resolveOtherTreatmentDate(ot)))
+                    .forEach((ot) => {
+                    const q = resolveOtherTreatmentQuantity(ot);
+                    if (q > 0) qtyMap[idx] = q;
                     idx++;
                   });
                   setRowQty(qtyMap);
@@ -2273,6 +2311,7 @@ const CustomerAnnualProgramSchedule = () => {
                   onClick={() => {
                     setShowBalanceWarning(false);
                     setPendingUpdatePayload(null);
+                    setPendingUpdateFallbackCustomer(null);
                   }}
                 >
                   Cancel

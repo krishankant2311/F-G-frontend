@@ -29,7 +29,6 @@ import {
   hydrateFormsFromCustomerCopyData,
   hydrateLaborDataFromCustomerCopy,
 } from "../../../utils/customerCopyEditHydrate";
-
 export default function EditCustomerFieldCopy() {
   const [formData, setFormData] = useState({
     customerName: "",
@@ -2160,6 +2159,7 @@ export default function EditCustomerFieldCopy() {
       <CustomerSalesOrderPreviewModal
         show={showSalesOrderPreview}
         materialRows={extractMaterialRows(forms)}
+        jobTypes={jobTypes}
         onClose={() => setShowSalesOrderPreview(false)}
         onGenerateMergeCopy={handleGenerateMergeCopy}
         isGenerating={disableBtn}

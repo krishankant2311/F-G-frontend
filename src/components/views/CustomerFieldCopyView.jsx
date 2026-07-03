@@ -19,11 +19,13 @@ import {
   getCustomerCopyDisplayDescription,
   getCustomerCopyMaterialsTableDisplayDescription,
   getCustomerCopyMaterialsTableMergeKey,
+  isLumpSumLaborFieldCopyItem,
   lookupJobTypeCatalogRate,
   lookupLaborMapValue,
   mergeCustomerCopyInvoiceSummaryRows,
   mergeLaborMapMissingKeys,
   normalizeJobTypeKey,
+  resolveCustomerCopyCrewLaborTaxable,
   resolveFieldCopyCrewUnitRate,
   resolveFieldCopyDisplayJobType,
   resolveOfficeFieldCopyGroupJobType,
@@ -314,7 +316,9 @@ Approved by: __________________  Date: ____________________`,
       materialData.length > 0 ||
       laborData.length > 0
     ) {
-      const summarizedData = summarizeFieldCopies(fieldCopies);
+      const summarizedData = summarizeFieldCopies(fieldCopies).filter(
+        (item) => !isLumpSumLaborFieldCopyItem(item)
+      );
 
       setCategorizedFieldCopies([
         { category: "Materials & Other", items: summarizedData },
@@ -1080,17 +1084,47 @@ Approved by: __________________  Date: ____________________`,
   /** Invoice summary rows — rebuilt from Materials & Other table totals (not API materialData). */
   const customerCopyInvoiceSummaryRows = useMemo(() => {
     const tableItems = categorizedFieldCopies?.[0]?.items ?? [];
+    const taxableJobTypeKeys = new Set();
+    for (const row of tableItems) {
+      if (!row?.isTaxable) continue;
+      const jt = jobTypeForCustomerCopyTableRow(row);
+      const key = normalizeJobTypeKey(jt);
+      if (key) taxableJobTypeKeys.add(key);
+    }
+
+    const laborTaxLookup = {
+      materialData,
+      officeFieldCopy: formData?.officeFieldCopy,
+      draftCopy: formData?.draftCopy,
+      taxableJobTypeKeys,
+    };
+
     const materialSeeds = tableItems.map((row) => {
       const { displayTotal } = getOfficeFieldCopyRowCalculations(row);
       const sell =
         Number(displayTotal) > 0
           ? displayTotal
           : Number(row?.totalPrice) || 0;
+      const jobType = jobTypeForCustomerCopyTableRow(row);
+      const isSourceLabor = String(row?.source || "") === "Labor";
+      const resolvedLaborTax = isSourceLabor
+        ? resolveCustomerCopyCrewLaborTaxable(
+            {
+              jobType,
+              isTaxable: row?.isTaxable,
+              isLaborTaxable: row?.isTaxable,
+            },
+            fieldCopies,
+            formData?.jobType,
+            laborTaxLookup
+          )
+        : !!row?.isTaxable;
       return {
-        jobType: jobTypeForCustomerCopyTableRow(row),
+        jobType,
         reference: row?.reference,
         source: row?.source,
-        isTaxable: row?.isTaxable,
+        isTaxable: isSourceLabor ? resolvedLaborTax : row?.isTaxable,
+        isLaborTaxable: isSourceLabor ? resolvedLaborTax : undefined,
         dataType: "Material",
         totalPrice: sell,
         quantity: row?.quantity,
@@ -1116,7 +1150,12 @@ Approved by: __________________  Date: ____________________`,
         return {
           jobType: labor?.jobType,
           totalPrice: sell,
-          isLaborTaxable: labor?.isLaborTaxable,
+          isLaborTaxable: resolveCustomerCopyCrewLaborTaxable(
+            labor,
+            fieldCopies,
+            formData?.jobType,
+            laborTaxLookup
+          ),
           dataType: "Labor",
         };
       });
@@ -1132,9 +1171,13 @@ Approved by: __________________  Date: ____________________`,
     fieldCopies,
     fieldLaborData,
     formData?.jobType,
+    formData?.officeFieldCopy,
+    formData?.draftCopy,
+    materialData,
     laborManHoursByJobType,
     laborHourlyRateByJobType,
     findLaborRateForJobType,
+    jobTypesCatalog,
   ]);
 
   const customerCopyInvoiceGrossSubtotal = useMemo(
@@ -1201,6 +1244,7 @@ Approved by: __________________  Date: ____________________`,
     laborTotal,
     customerCopyInvoiceSummaryRows,
     materialsTotal,
+    jobTypesCatalog,
   ]);
 
   // function categorizeMaterial(materialData) {

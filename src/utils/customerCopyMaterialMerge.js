@@ -2,7 +2,10 @@ import {
   applyReferenceVendorToForm,
   getMaterialNameInputValue,
   materialNameBaseForEdit,
+  normalizeFgEditableUnitValue,
+  recalcFgFieldCopyLineTotals,
   recalcOtherFieldCopyLine,
+  syncFgCostPriceOnUserEdit,
 } from "./materialReference";
 
 export function isMergeableMaterialRow(form) {
@@ -174,3 +177,88 @@ export function formatPreviewMoney(value) {
   if (!Number.isFinite(n)) return "";
   return n.toFixed(2);
 }
+
+/** Apply field edits in Customer Sales Order Preview (F&G / Other material rows). */
+export function applyPreviewMaterialRowFieldChange(row, name, value) {
+  if (!row) return row;
+
+  if (name === "source") {
+    return applyReferenceVendorToForm({ ...row, source: value });
+  }
+
+  let updated = { ...row, [name]: value };
+
+  if (name === "reference") {
+    updated.referenceBase = value;
+  }
+
+  if (updated.source === "F&G" && (name === "cost" || name === "price")) {
+    updated[name] = normalizeFgEditableUnitValue(value);
+  }
+
+  if (name === "cost" && updated.source === "Other") {
+    updated = recalcOtherFieldCopyLine(updated, "cost");
+  }
+
+  if (name === "price" || name === "quantity") {
+    if (updated.source === "Other") {
+      updated = recalcOtherFieldCopyLine(
+        updated,
+        name === "quantity" ? "preserve" : "price"
+      );
+    } else if (updated.source === "F&G") {
+      if (name === "price") {
+        updated = syncFgCostPriceOnUserEdit(updated, "price");
+      } else {
+        updated = recalcFgFieldCopyLineTotals(updated);
+      }
+    }
+  }
+
+  if (name === "cost" && updated.source === "F&G") {
+    updated = syncFgCostPriceOnUserEdit(updated, "cost");
+  }
+
+  if (name === "markup" || name === "markUp") {
+    const markupVal = parseFloat(updated.markUp ?? updated.markup) || 0;
+    updated.markup = markupVal;
+    updated.markUp = markupVal;
+
+    if (updated.source === "Other") {
+      updated = recalcOtherFieldCopyLine(updated, "preserve");
+    } else if (updated.source === "F&G") {
+      const totalCost = parseFloat(updated.totalCost) || 0;
+      updated.totalPrice =
+        totalCost > 0
+          ? Math.round((totalCost + (totalCost * markupVal) / 100) * 100) / 100
+          : "";
+    }
+  }
+
+  if (name === "totalPrice") {
+    const tp = parseFloat(value) || 0;
+    const qty = parseFloat(updated.quantity) || 0;
+    updated.totalPrice = value === "" ? "" : tp;
+
+    if (qty > 0 && tp > 0) {
+      const unitPrice = Math.round((tp / qty) * 10000) / 10000;
+      updated.price = unitPrice;
+      if (updated.source === "F&G") {
+        updated = syncFgCostPriceOnUserEdit(updated, "price");
+      } else if (updated.source === "Other") {
+        updated = recalcOtherFieldCopyLine(updated, "price");
+      }
+    }
+  }
+
+  if (name === "isTaxable") {
+    updated.isTaxable = value === "true" || value === true;
+    if (updated.source === "Other") {
+      updated = recalcOtherFieldCopyLine(updated, "preserve");
+    }
+  }
+
+  return applyReferenceVendorToForm(updated);
+}
+
+export { getMaterialNameInputValue };
