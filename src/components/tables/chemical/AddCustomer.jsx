@@ -8,6 +8,7 @@ import { useNavigate } from "react-router-dom";
 import {
   DEFAULT_ANNUAL_TREATMENTS,
   buildAnnualTreatmentsFromCatalog,
+  filterAnnualProgramTreatments,
 } from "../../../utils/otherTreatmentDefaults";
 import { getCustomLocalTreatments } from "../../../utils/otherTreatmentLocalStore";
 import {
@@ -232,7 +233,9 @@ export default function AddCustomer() {
       if (!token) {
         const localAnnual = buildAnnualTreatmentsFromCatalog([], localItems);
         setAnnualTreatments(
-          localAnnual.length > 0 ? localAnnual : DEFAULT_ANNUAL_TREATMENTS
+          filterAnnualProgramTreatments(
+            localAnnual.length > 0 ? localAnnual : DEFAULT_ANNUAL_TREATMENTS
+          )
         );
         setCatalogTreatments(localItems.filter((t) => t.programType === "other"));
         toast.error("Please log in again to load treatments from server", {
@@ -277,7 +280,9 @@ export default function AddCustomer() {
 
       const annual = buildAnnualTreatmentsFromCatalog(items, localItems);
       setAnnualTreatments(
-        annual.length > 0 ? annual : DEFAULT_ANNUAL_TREATMENTS
+        filterAnnualProgramTreatments(
+          annual.length > 0 ? annual : DEFAULT_ANNUAL_TREATMENTS
+        )
       );
 
       const localOther = localItems.filter((t) => t.programType === "other");
@@ -295,7 +300,9 @@ export default function AddCustomer() {
       console.error("Failed to load treatment catalog:", error);
       const localAnnual = buildAnnualTreatmentsFromCatalog([], localItems);
       setAnnualTreatments(
-        localAnnual.length > 0 ? localAnnual : DEFAULT_ANNUAL_TREATMENTS
+        filterAnnualProgramTreatments(
+          localAnnual.length > 0 ? localAnnual : DEFAULT_ANNUAL_TREATMENTS
+        )
       );
       setCatalogTreatments(localItems.filter((t) => t.programType === "other"));
       toast.error(
@@ -1217,6 +1224,7 @@ export default function AddCustomer() {
                       const dropdownOptions = buildChemicalOtherTreatmentDropdownOptions({
                         chemicalMixes,
                         catalogTreatments,
+                        isChemicalMaintenanceEnabled: isChemicalChecked,
                         isKeyTaken: isKeyTakenElsewhere,
                       });
 

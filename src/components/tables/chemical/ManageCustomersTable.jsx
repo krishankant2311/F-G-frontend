@@ -7,6 +7,8 @@ import "react-toastify/dist/ReactToastify.css";
 import parse from "html-react-parser";
 import EditCustomerModal from "./components/ManageCustomer/EditCustomer";
 import DeleteCustomer from "./components/ManageCustomer/DeleteCustomer";
+import ManageCustomersPreviousPlansSection from "./ManageCustomersPreviousPlansSection";
+import { saveHighlightedArchivedPlan } from "../../../utils/archivedPlanHighlight";
 
 // components/Dashboard/dummyCustomers.js
 export const DUMMY_CUSTOMERS = [
@@ -94,6 +96,7 @@ export default function ManageCustomersTable() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [rolloverLoadingId, setRolloverLoadingId] = useState("");
+  const [archivedPlansRefreshToken, setArchivedPlansRefreshToken] = useState(0);
 
   const { tableSize } = useTableContext();
 
@@ -318,6 +321,11 @@ export default function ManageCustomersTable() {
 
       if (response.data.success) {
         toast.success(response.data.message || "Plan archived and new year started");
+        const archivedPlan = response.data.data?.archivedPlan;
+        if (archivedPlan) {
+          saveHighlightedArchivedPlan(archivedPlan);
+        }
+        setArchivedPlansRefreshToken((n) => n + 1);
         getAllChemicalCustomers();
       } else {
         toast.error(response.data.message || "Rollover failed");
@@ -795,6 +803,9 @@ export default function ManageCustomersTable() {
           </div>
         </div>
       </div>
+
+      <ManageCustomersPreviousPlansSection refreshToken={archivedPlansRefreshToken} />
+
       <div
         className="modal fade"
         id="exampleModalCenter"

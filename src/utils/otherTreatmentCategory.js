@@ -1,4 +1,10 @@
 import {
+  findOtherChemicalProgramTreatment,
+  isOtherChemicalProgramTreatment,
+  normalizeTreatmentNameKey,
+  augmentChemicalMixesWithProgramTreatments,
+} from "./otherTreatmentDefaults";
+import {
   CATALOG_OPTION_PREFIX,
   MATERIAL_OPTION_PREFIX,
   resolveMaterialUnitCost,
@@ -24,6 +30,11 @@ export function isChemicalOtherTreatment(ot) {
   if (ot.isChemicalTreatment === false) return false;
   if (ot.isChemicalTreatment === true) return true;
   if (ot.materialId) return false;
+  if (isOtherChemicalProgramTreatment(
+    ot.treatment || ot.mixName || ot.treatmentName || ""
+  )) {
+    return true;
+  }
   if (ot.mixId || ot.mixName) return true;
   if (Array.isArray(ot.chemicals) && ot.chemicals.length > 0) return true;
   if (ot.treatmentCatalogId) return true;
@@ -93,6 +104,55 @@ export function resolveOtherTreatmentName(ot) {
     ot.treatmentName ||
     ""
   );
+}
+
+/** Convert an annual-program row (other-chemical bag/bottle) into otherTreatments shape. */
+export function annualTreatmentRowToOtherTreatment(at) {
+  if (!at?.name || !isOtherChemicalProgramTreatment(at.name)) return null;
+
+  const qty = Number(at.quantity || 0);
+  const qtySafe = Number.isFinite(qty) && qty > 0 ? qty : 0;
+  const savedPrice = Number(at.price || 0);
+  const savedCost = Number(at.cost || 0);
+  const programDef = findOtherChemicalProgramTreatment(at.name);
+  const unitPrice =
+    qtySafe > 0 && savedPrice > 0
+      ? savedPrice / qtySafe
+      : Number(programDef?.price || 100);
+  const unitCost =
+    qtySafe > 0 && savedCost > 0
+      ? savedCost / qtySafe
+      : Number(programDef?.cost || 80);
+
+  const scheduleDates =
+    Array.isArray(at.scheduleDates) && at.scheduleDates.length
+      ? at.scheduleDates.filter(Boolean)
+      : at.scheduleDate
+        ? [at.scheduleDate]
+        : [];
+  const date = scheduleDates[0] || at.scheduleDate || null;
+
+  const payload = {
+    treatment: String(at.name).trim(),
+    qty: qtySafe,
+    totalPricePerTank: unitPrice,
+    totalCostPerTank: unitCost,
+    isChemicalTreatment: true,
+    projectCode: at.projectCode || "",
+    status: at.status || "Scheduled",
+  };
+
+  if (date) {
+    return withOtherTreatmentDates(payload, date);
+  }
+  return { ...payload, date: null, scheduleDate: null };
+}
+
+/** Annual rows for bag/bottle program chemicals → otherTreatments entries. */
+export function migrateAnnualOtherChemicalToOtherTreatments(annualRows = []) {
+  return (annualRows || [])
+    .map(annualTreatmentRowToOtherTreatment)
+    .filter(Boolean);
 }
 
 export function withOtherTreatmentDates(ot, dateVal) {
@@ -217,9 +277,15 @@ export function buildMaterialOtherTreatmentDropdownOptions({
 export function buildChemicalOtherTreatmentDropdownOptions({
   chemicalMixes = [],
   catalogTreatments = [],
+  isChemicalMaintenanceEnabled = false,
   isKeyTaken = () => false,
 }) {
-  const mixOptions = (chemicalMixes || [])
+  const mixesForDropdown = augmentChemicalMixesWithProgramTreatments(
+    chemicalMixes,
+    isChemicalMaintenanceEnabled
+  );
+
+  const mixOptions = mixesForDropdown
     .filter((mix) => mix?.mixName && !isKeyTaken(mix.mixName))
     .map((mix) => ({
       key: mix.mixName,
@@ -229,6 +295,7 @@ export function buildChemicalOtherTreatmentDropdownOptions({
 
   const catalogOptions = (catalogTreatments || [])
     .filter((c) => c?.treatmentName)
+    .filter((c) => !isOtherChemicalProgramTreatment(c.treatmentName))
     .map((c) => ({
       key: `${CATALOG_OPTION_PREFIX}${c._id}`,
       label: c.treatmentName,
@@ -360,9 +427,16 @@ export function formatOtherTreatmentRowsForApi(
           row.cost !== "" && row.cost != null
             ? Number(row.cost)
             : row.mixData.totalCostPerTank || 0;
-        return uniqDates.map((d) =>
-          withOtherTreatmentDates(
-            {
+        const programFromMix = findOtherChemicalProgramTreatment(row.mixData.mixName);
+        const mixPayload = programFromMix
+          ? {
+              ...baseData,
+              treatment: row.mixData.mixName,
+              totalCostPerTank: unitCost,
+              totalPricePerTank: pricePerTank,
+              isChemicalTreatment: true,
+            }
+          : {
               ...baseData,
               treatment: row.mixData.mixName,
               mixName: row.mixData.mixName,
@@ -370,6 +444,27 @@ export function formatOtherTreatmentRowsForApi(
               totalCostPerTank: unitCost,
               totalPricePerTank: pricePerTank,
               mixId: row.mixData._id,
+              isChemicalTreatment: true,
+            };
+        return uniqDates.map((d) => withOtherTreatmentDates(mixPayload, d));
+      }
+
+      const programItem = findOtherChemicalProgramTreatment(row.treatment);
+      if (programItem) {
+        const defaultPrice = isChemicalMaintenanceEnabled
+          ? programItem.lowerPrice ?? programItem.price ?? 0
+          : programItem.price ?? 0;
+        const pricePerTank =
+          row.price !== "" && row.price != null ? Number(row.price) : defaultPrice;
+        const unitCost =
+          row.cost !== "" && row.cost != null ? Number(row.cost) : programItem.cost || 0;
+        return uniqDates.map((d) =>
+          withOtherTreatmentDates(
+            {
+              ...baseData,
+              treatment: programItem.name,
+              totalCostPerTank: unitCost,
+              totalPricePerTank: pricePerTank,
               isChemicalTreatment: true,
             },
             d
@@ -433,6 +528,22 @@ export function applyOtherTreatmentSelection(
     };
   }
 
+  const programItem = findOtherChemicalProgramTreatment(value);
+  if (programItem) {
+    return {
+      ...row,
+      ...baseReset,
+      treatment: programItem.name,
+      mixData: null,
+      catalogData: null,
+      materialData: null,
+      price: isChemicalMaintenanceEnabled
+        ? programItem.lowerPrice ?? programItem.price ?? ""
+        : programItem.price ?? "",
+      cost: programItem.cost ?? "",
+    };
+  }
+
   const selectedMix = chemicalMixes.find((mix) => mix.mixName === value);
   return {
     ...row,
@@ -444,4 +555,63 @@ export function applyOtherTreatmentSelection(
     price: selectedMix ? selectedMix.totalPricePerTank ?? "" : "",
     cost: selectedMix ? selectedMix.totalCostPerTank ?? "" : "",
   };
+}
+
+function toInputDate(dateVal) {
+  if (!dateVal) return null;
+  try {
+    const d =
+      typeof dateVal === "string" && /^\d{4}-\d{2}-\d{2}$/.test(dateVal)
+        ? new Date(`${dateVal}T12:00:00`)
+        : new Date(dateVal);
+    if (isNaN(d.getTime())) return null;
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  } catch {
+    return null;
+  }
+}
+
+function savedOtherTreatmentToFormRow(ot) {
+  const qty = resolveOtherTreatmentQuantity(ot);
+  const resolvedDate = resolveOtherTreatmentDate(ot);
+  const formattedDate = toInputDate(resolvedDate);
+  const scheduledDates = formattedDate ? [formattedDate] : [];
+
+  return {
+    ...EMPTY_OTHER_TREATMENT_ROW,
+    treatment: resolveOtherTreatmentName(ot),
+    quantity: qty > 0 ? String(qty) : "",
+    scheduledDate: formattedDate || "",
+    scheduledDates,
+    price: ot.totalPricePerTank ?? "",
+    cost: ot.totalCostPerTank ?? "",
+  };
+}
+
+/** Build OTHER CHEMICAL TREATMENTS form rows from saved customer data only. */
+export function buildOtherChemicalFormRowsFromCustomer(
+  annualTreatments = [],
+  otherTreatments = [],
+  isChemicalMaintenanceEnabled = false,
+  emptyRow = null
+) {
+  const rows = [];
+  const seen = new Set();
+
+  const addRow = (row) => {
+    const key = normalizeTreatmentNameKey(row.treatment);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    rows.push(row);
+  };
+
+  (otherTreatments || [])
+    .filter(isChemicalOtherTreatment)
+    .forEach((ot) => addRow(savedOtherTreatmentToFormRow(ot)));
+
+  if (rows.length) return rows;
+  return [emptyRow || { ...EMPTY_OTHER_TREATMENT_ROW, quantity: "", scheduledDate: "", scheduledDates: [] }];
 }

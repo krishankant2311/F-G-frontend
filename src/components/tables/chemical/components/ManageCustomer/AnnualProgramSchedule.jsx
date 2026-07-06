@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useTableContext } from "../../../../../context/TableContext";
@@ -8,6 +7,7 @@ import "react-toastify/dist/ReactToastify.css";
 import ViewTreatmentDetails from "../Dashboard/ViewCustomer";
 import EditCustomer from "../Dashboard/EditCustomer";
 import { getCustomLocalTreatments } from "../../../../../utils/otherTreatmentLocalStore";
+import { saveHighlightedArchivedPlan } from "../../../../../utils/archivedPlanHighlight";
 import {
   CATALOG_OPTION_PREFIX,
   fetchActiveMaterials,
@@ -26,12 +26,14 @@ import {
   isActiveOtherTreatmentEntry,
   isChemicalOtherTreatment,
   mergeFormOtherTreatmentsIntoList,
+  migrateAnnualOtherChemicalToOtherTreatments,
   otherTreatmentFormRowIsReady,
   resolveOtherTreatmentDate,
   resolveOtherTreatmentName,
   resolveOtherTreatmentQuantity,
   scheduleItemAppliesLabor,
 } from "../../../../../utils/otherTreatmentCategory";
+import { isOtherChemicalProgramTreatment, normalizeTreatmentNameKey } from "../../../../../utils/otherTreatmentDefaults";
 
 const CustomerAnnualProgramSchedule = () => {
   const { customerId: paramCustomerId } = useParams();
@@ -89,6 +91,7 @@ const CustomerAnnualProgramSchedule = () => {
   const [rowQty, setRowQty] = useState({});
   const [projectCodes, setProjectCodes] = useState({});
   const [additionalAnnualRows, setAdditionalAnnualRows] = useState([]);
+  const [removedScheduleRowKeys, setRemovedScheduleRowKeys] = useState([]);
 
   // Key helpers: avoid collisions when annual rows expand by multiple dates.
   // Annual qty/projectCode are per-treatment (originalIndex), while date is per-row (originalIndex + dateIndex).
@@ -313,6 +316,12 @@ const CustomerAnnualProgramSchedule = () => {
 
 
 
+  // OTHER CHEMICAL form stays empty — saved rows show in the schedule table above.
+  useEffect(() => {
+    if (!state) return;
+    setNewOtherChemicalTreatments([emptyOtherFormRow()]);
+  }, [state?.customerId]);
+
   // Initialize dates, projectCodes, and rowQty from state data (only once on mount) - indices match main table (all annual then other)
   useEffect(() => {
     if (state && Object.keys(dates).length === 0) {
@@ -408,6 +417,8 @@ const CustomerAnnualProgramSchedule = () => {
   // Build schedule data from ALL annual treatments (with or without scheduleDate), so user can add date later for any
   // Calculate unit price: if quantity > 0, use price/quantity, else default to 100 (base unit price from AddCustomer)
   const annualScheduleData = (annualTreatments || []).flatMap((at, originalIndex) => {
+    if (isOtherChemicalProgramTreatment(at.name)) return [];
+
     const qty = wholeQuantity(at.quantity || 0);
     const savedPrice = at.price || 0;
     const savedCost = at.cost || 0;
@@ -450,6 +461,67 @@ const CustomerAnnualProgramSchedule = () => {
       dateIndex,
     }));
   });
+
+  // Legacy: other-chemical program rows still stored in annualTreatments (not yet in otherTreatments).
+  const otherTreatmentNameKeys = new Set(
+    (otherTreatments || []).map((ot) =>
+      normalizeTreatmentNameKey(resolveOtherTreatmentName(ot))
+    )
+  );
+
+  const otherChemicalFromAnnualScheduleData = (annualTreatments || []).flatMap(
+    (at, originalIndex) => {
+      if (!isOtherChemicalProgramTreatment(at.name)) return [];
+      if (otherTreatmentNameKeys.has(normalizeTreatmentNameKey(at.name))) return [];
+
+      const qty = wholeQuantity(at.quantity || 0);
+      const savedPrice = at.price || 0;
+      const savedCost = at.cost || 0;
+      const unitPrice = qty > 0 ? savedPrice / qty : 100;
+      const unitCost = qty > 0 ? savedCost / qty : 80;
+
+      const ds =
+        Array.isArray(at.scheduleDates) && at.scheduleDates.length > 0
+          ? at.scheduleDates
+          : at.scheduleDate
+            ? [at.scheduleDate]
+            : [];
+
+      if (!ds.length) {
+        return [
+          {
+            treatment: at.name,
+            quantity: qty,
+            scheduledDate: null,
+            price: savedPrice,
+            cost: savedCost,
+            unitPrice,
+            unitCost,
+            projectCode: at.projectCode || "",
+            type: "annual",
+            originalIndex,
+            dateIndex: null,
+            isChemicalTreatment: true,
+          },
+        ];
+      }
+
+      return ds.map((d, dateIndex) => ({
+        treatment: at.name,
+        quantity: qty,
+        scheduledDate: d,
+        price: savedPrice,
+        cost: savedCost,
+        unitPrice,
+        unitCost,
+        projectCode: at.projectCode || "",
+        type: "annual",
+        originalIndex,
+        dateIndex,
+        isChemicalTreatment: true,
+      }));
+    }
+  );
 
   // Build schedule data from other treatments (from state - already saved)
   const otherScheduleDataFromState = (otherTreatments || []).flatMap((ot, originalIndex) => {
@@ -536,11 +608,17 @@ const CustomerAnnualProgramSchedule = () => {
   // Program table: saved schedule only — OTHER TREATMENTS form rows appear after Update
   const scheduledTreatments = [
     ...annualRowsWithInsertedDuplicates,
+    ...otherChemicalFromAnnualScheduleData,
     ...otherScheduleDataFromState,
   ];
 
+  const removedScheduleRowKeySet = new Set(removedScheduleRowKeys);
+  const visibleScheduledTreatments = scheduledTreatments.filter(
+    (st) => !removedScheduleRowKeySet.has(getDateKey(st))
+  );
+
   // ✅ total (price total) - recalculate based on current quantities
-  const programTotal = scheduledTreatments.reduce((sum, t) => {
+  const programTotal = visibleScheduledTreatments.reduce((sum, t) => {
     const qtyKey = getQtyKey(t);
     const currentQty =
       rowQty[qtyKey] !== undefined
@@ -555,7 +633,7 @@ const CustomerAnnualProgramSchedule = () => {
   }, 0);
 
   // ✅ total (cost total) - recalculate based on current quantities
-  const programCostTotal = scheduledTreatments.reduce((sum, t, index) => {
+  const programCostTotal = visibleScheduledTreatments.reduce((sum, t, index) => {
     const qtyKey = getQtyKey(t);
     const currentQty = rowQty[qtyKey] !== undefined ? wholeQuantity(rowQty[qtyKey]) : wholeQuantity(t.quantity || 0);
     const baseQty = Number(t.quantity) || 0;
@@ -566,7 +644,7 @@ const CustomerAnnualProgramSchedule = () => {
     return sum + (currentQty * (Number(unitCost) || 0));
   }, 0);
 
-  const programLaborCostTotal = scheduledTreatments.reduce((sum, t) => {
+  const programLaborCostTotal = visibleScheduledTreatments.reduce((sum, t) => {
     if (!scheduleItemAppliesLabor(t)) return sum;
     const qtyKey = getQtyKey(t);
     const currentQty =
@@ -578,7 +656,7 @@ const CustomerAnnualProgramSchedule = () => {
 
   const programCostPer100GalTankTotal = programCostTotal + programLaborCostTotal;
 
-  const programLaborPriceTotal = scheduledTreatments.reduce((sum, t) => {
+  const programLaborPriceTotal = visibleScheduledTreatments.reduce((sum, t) => {
     if (!scheduleItemAppliesLabor(t)) return sum;
     const qtyKey = getQtyKey(t);
     const currentQty =
@@ -717,6 +795,33 @@ const CustomerAnnualProgramSchedule = () => {
       if (!dateKey || !(dateKey in prev)) return prev;
       const next = { ...prev };
       delete next[dateKey];
+      return next;
+    });
+  };
+
+  const handleDeleteScheduleRow = (item) => {
+    if (!item) return;
+
+    const isDuplicatedAnnualRow =
+      item.type === "annual" &&
+      typeof item.dateIndex === "string" &&
+      item.dateIndex.startsWith("extra-");
+    if (isDuplicatedAnnualRow) {
+      removeDuplicatedAnnualRow(item);
+      return;
+    }
+
+    const rowKey = getDateKey(item);
+    if (!rowKey) return;
+
+    setRemovedScheduleRowKeys((prev) =>
+      prev.includes(rowKey) ? prev : [...prev, rowKey]
+    );
+
+    setDates((prev) => {
+      if (!(rowKey in prev)) return prev;
+      const next = { ...prev };
+      delete next[rowKey];
       return next;
     });
   };
@@ -860,6 +965,7 @@ const CustomerAnnualProgramSchedule = () => {
     setNewOtherTreatments([emptyOtherFormRow()]);
     setNewOtherChemicalTreatments([emptyOtherFormRow()]);
     setAdditionalAnnualRows([]);
+    setRemovedScheduleRowKeys([]);
   };
 
   const executeCustomerUpdate = async (payload, { fallbackCustomer } = {}) => {
@@ -884,6 +990,10 @@ const CustomerAnnualProgramSchedule = () => {
 
     if (updateRes.data.success) {
       toast.success("Schedule updated successfully", { toastId: SCHEDULE_SUCCESS_TOAST_ID });
+
+      if (updateRes.data.archivedPlan) {
+        saveHighlightedArchivedPlan(updateRes.data.archivedPlan);
+      }
 
       const customerForUi = {
         ...(fallbackCustomer || {}),
@@ -966,7 +1076,7 @@ const CustomerAnnualProgramSchedule = () => {
 
     try {
       // Validate ANNUAL TREATMENTS - check if quantity is filled but date is missing
-      const incompleteAnnualTreatments = scheduledTreatments.filter((st, index) => {
+      const incompleteAnnualTreatments = visibleScheduledTreatments.filter((st, index) => {
         if (st.type !== "annual") return false;
         const qtyKey = getQtyKey(st);
         const dateKey = getDateKey(st);
@@ -1045,9 +1155,9 @@ const CustomerAnnualProgramSchedule = () => {
       console.log("Dates state:", dates);
       console.log("RowQty state:", rowQty);
       console.log("ProjectCodes state:", projectCodes);
-      console.log("ScheduledTreatments:", scheduledTreatments);
+      console.log("ScheduledTreatments:", visibleScheduledTreatments);
       
-      scheduledTreatments.forEach((st, scheduledIndex) => {
+      visibleScheduledTreatments.forEach((st, scheduledIndex) => {
         const dateKey = getDateKey(st);
         const qtyKey = getQtyKey(st);
         const pcKey = getProjectCodeKey(st);
@@ -1152,9 +1262,16 @@ const CustomerAnnualProgramSchedule = () => {
         });
       });
 
+      const updatedAnnualTreatmentsWithoutOtherChemical = updatedAnnualTreatments.filter(
+        (at) => !isOtherChemicalProgramTreatment(at.name)
+      );
+
       // Update existing other treatments from what the table already shows (state),
       // not only what the GET returned — indices must match scheduledTreatments.
-      const updatedExistingOtherTreatments = savedOtherTreatmentsSnapshot.map((ot, index) => {
+      const updatedExistingOtherTreatments = savedOtherTreatmentsSnapshot
+        .map((ot, index) => {
+        if (removedScheduleRowKeySet.has(`other-${index}`)) return null;
+
         const updates = otherTreatmentUpdates[index];
         
         // If no updates for this treatment, return as is
@@ -1190,7 +1307,8 @@ const CustomerAnnualProgramSchedule = () => {
         });
         
         return updatedTreatment;
-      });
+      })
+        .filter(Boolean);
 
       const formattedNewOtherTreatments = [
         ...formatOtherTreatmentRowsForApi(formOtherRowsSnapshot, {
@@ -1232,6 +1350,13 @@ const CustomerAnnualProgramSchedule = () => {
         formattedNewOtherTreatments
       );
 
+      updatedOtherTreatments = mergeFormOtherTreatmentsIntoList(
+        updatedOtherTreatments,
+        migrateAnnualOtherChemicalToOtherTreatments(updatedAnnualTreatments).filter(
+          isActiveOtherTreatmentEntry
+        )
+      );
+
       const scheduledOtherAfterMerge = updatedOtherTreatments.filter((ot) =>
         hasValidOtherTreatmentDate(resolveOtherTreatmentDate(ot))
       ).length;
@@ -1255,8 +1380,9 @@ const CustomerAnnualProgramSchedule = () => {
         customerPhone: currentCustomer.customerPhone,
         jobAddress: currentCustomer.jobAddress,
         isChemicalMaintenanceEnabled: currentCustomer.isChemicalMaintenanceEnabled,
-        annualTreatments: updatedAnnualTreatments,
+        annualTreatments: updatedAnnualTreatmentsWithoutOtherChemical,
         otherTreatments: updatedOtherTreatments,
+        archivePreviousPlan: true,
       };
 
       // Warning rule: show confirmation when remaining annual balance falls below/equal $50.
@@ -1267,7 +1393,7 @@ const CustomerAnnualProgramSchedule = () => {
         return Number.isFinite(parsed) ? parsed : 0;
       };
 
-      const scheduledAnnualAmount = (updatedAnnualTreatments || [])
+      const scheduledAnnualAmount = (updatedAnnualTreatmentsWithoutOtherChemical || [])
         .filter((at) => at.scheduleDate)
         .reduce((sum, at) => sum + toSafeNumber(at.price), 0);
 
@@ -1281,7 +1407,7 @@ const CustomerAnnualProgramSchedule = () => {
 
       const annualProgramTotal = scheduledAnnualAmount + scheduledOtherAmount;
 
-      const completedAnnualAmount = (updatedAnnualTreatments || [])
+      const completedAnnualAmount = (updatedAnnualTreatmentsWithoutOtherChemical || [])
         .filter((at) => (at.status || "").toString().trim().toLowerCase() === "completed")
         .reduce((sum, at) => sum + toSafeNumber(at.price), 0);
 
@@ -1373,15 +1499,11 @@ const CustomerAnnualProgramSchedule = () => {
             </tr>
           </thead>
           <tbody>
-            {scheduledTreatments.length > 0 ? (
-              scheduledTreatments.map((item, i) => {
+            {visibleScheduledTreatments.length > 0 ? (
+              visibleScheduledTreatments.map((item, i) => {
                 const dateKey = getDateKey(item);
                 const qtyKey = getQtyKey(item);
                 const pcKey = getProjectCodeKey(item);
-                const isDuplicatedAnnualRow =
-                  item.type === "annual" &&
-                  typeof item.dateIndex === "string" &&
-                  item.dateIndex.startsWith("extra-");
                 const originalDate = formatDateForInput(item.scheduledDate);
                 const editedDate = dates[dateKey] || null;
                 const dateInputValue = editedDate || originalDate || "";
@@ -1568,16 +1690,14 @@ const CustomerAnnualProgramSchedule = () => {
                             +
                           </button>
                         )}
-                        {isDuplicatedAnnualRow && (
-                          <button
-                            type="button"
-                            title="Remove duplicated row"
-                            onClick={() => removeDuplicatedAnnualRow(item)}
-                            className="text-white bg-red-500 w-5 h-5 rounded-full flex items-center justify-center text-xs leading-none"
-                          >
-                            -
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          title="Delete treatment"
+                          onClick={() => handleDeleteScheduleRow(item)}
+                          className="text-white bg-red-500 w-5 h-5 rounded-full flex items-center justify-center text-xs leading-none"
+                        >
+                          ×
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -1591,7 +1711,7 @@ const CustomerAnnualProgramSchedule = () => {
               </tr>
             )}
 
-            {scheduledTreatments.length > 0 && (
+            {visibleScheduledTreatments.length > 0 && (
               <tr className="font-bold">
                 <td colSpan="4" className="border p-2 text-right text-green-600">
                   PROGRAM TOTAL
@@ -1617,7 +1737,7 @@ const CustomerAnnualProgramSchedule = () => {
                 <td className="border p-2"></td>
               </tr>
             )}
-            {scheduledTreatments.length > 0 && (
+            {visibleScheduledTreatments.length > 0 && (
               <tr className="font-bold">
                 <td colSpan="4" className="border p-2 text-right text-black">
                   CONTRACT TOTAL
@@ -1657,7 +1777,7 @@ const CustomerAnnualProgramSchedule = () => {
             {newOtherTreatments.map((item, index) => {
               // Rows still being edited below are also previewed in the main table as
               // type "other-new" — don't treat those as taken or the select goes blank.
-              const scheduledTreatmentNames = scheduledTreatments
+              const scheduledTreatmentNames = visibleScheduledTreatments
                 .filter((st) => st.type !== "other-new" && st.type !== "other-chemical-new")
                 .map((st) => st.treatment);
 
@@ -1975,9 +2095,10 @@ const CustomerAnnualProgramSchedule = () => {
 
               const dropdownOptions = buildChemicalOtherTreatmentDropdownOptions({
                 chemicalMixes: chemicalMixes.filter(
-                  (mix) => !scheduledTreatments.some((st) => st.treatment === mix.mixName)
+                  (mix) => !visibleScheduledTreatments.some((st) => st.treatment === mix.mixName)
                 ),
                 catalogTreatments,
+                isChemicalMaintenanceEnabled: maintenanceEnabledNormalized,
                 isKeyTaken: isKeyTakenElsewhere,
               });
 

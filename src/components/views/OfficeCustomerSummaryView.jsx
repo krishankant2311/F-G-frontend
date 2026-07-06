@@ -4,6 +4,7 @@ import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import { useTableContext } from "../../context/TableContext";
 import {
+  downloadCustomerSummaryCsv,
   formatProjectDate,
   formatSummaryDescription,
   formatSummaryMoney,
@@ -40,6 +41,7 @@ function FilterButton({ label, active, onClick }) {
 }
 
 function CustomerSummaryBlock({ customer, onRemove }) {
+  const exportModalId = `customerSummaryExportModal_${customer._id}`;
   const [statusFilters, setStatusFilters] = useState({
     ONGOING: true,
     COMPLETED: false,
@@ -48,6 +50,7 @@ function CustomerSummaryBlock({ customer, onRemove }) {
   const [costMode, setCostMode] = useState(false);
   const [loading, setLoading] = useState(false);
   const [projects, setProjects] = useState([]);
+  const [exportDocumentName, setExportDocumentName] = useState("");
 
   const activeStatusTabs = useMemo(
     () => STATUS_FILTERS.filter((tab) => statusFilters[tab]),
@@ -118,14 +121,38 @@ function CustomerSummaryBlock({ customer, onRemove }) {
           description: formatSummaryDescription(project.description),
           ...pricing,
           startDate: formatProjectDate(project.projectStartDate),
+          startDateRaw: project.projectStartDate,
           completionDate: formatProjectDate(project.projectCompletedDate),
+          completionDateRaw: project.projectCompletedDate,
           isBid: String(project.billingType || "").toLowerCase() === "bid" ? "Yes" : "No",
         };
       }),
     [projects]
   );
 
-  const columnCount = costMode ? 12 : 10;
+  const columnCount = costMode ? 15 : 10;
+
+  const defaultExportDocumentName = `${customer.customerName || "customer"}-summary`;
+
+  const openExportModal = () => {
+    if (!rows.length) {
+      toast.info("No project rows to export.");
+      return;
+    }
+    setExportDocumentName(defaultExportDocumentName);
+  };
+
+  const handleDownloadCsv = () => {
+    if (!rows.length) {
+      toast.info("No project rows to export.");
+      return;
+    }
+    const ok = downloadCustomerSummaryCsv(customer.customerName, rows, {
+      costMode,
+      fileName: exportDocumentName.trim() || defaultExportDocumentName,
+    });
+    if (ok) toast.success("CSV downloaded.");
+  };
 
   return (
     <div className="mb-10">
@@ -180,9 +207,18 @@ function CustomerSummaryBlock({ customer, onRemove }) {
                 <th className="border border-black p-2 font-bold">LABOR COST</th>
               )}
               <th className="border border-black p-2 font-bold">LABOR PRICE</th>
-              <th className="border border-black p-2 font-bold">CONTRACT LABOR</th>
-              <th className="border border-black p-2 font-bold">LUMP SUM</th>
-              <th className="border border-black p-2 font-bold">TOTAL</th>
+              {costMode && (
+                <th className="border border-black p-2 font-bold">CONTRACT LABOR COST</th>
+              )}
+              <th className="border border-black p-2 font-bold">CONTRACT LABOR PRICE</th>
+              {costMode && (
+                <th className="border border-black p-2 font-bold">LUMP SUM COST</th>
+              )}
+              <th className="border border-black p-2 font-bold">LUMP SUM PRICE</th>
+              {costMode && (
+                <th className="border border-black p-2 font-bold">TOTAL COST</th>
+              )}
+              <th className="border border-black p-2 font-bold">TOTAL PRICE</th>
               <th className="border border-black p-2 font-bold">START DATE</th>
               <th className="border border-black p-2 font-bold">COMPLETION DATE</th>
               <th className="border border-black p-2 font-bold">BID</th>
@@ -216,14 +252,29 @@ function CustomerSummaryBlock({ customer, onRemove }) {
                   <td className="border border-black p-2">
                     {formatSummaryMoney(row.laborPrice)}
                   </td>
+                  {costMode && (
+                    <td className="border border-black p-2">
+                      {formatSummaryMoney(row.contractLaborCost)}
+                    </td>
+                  )}
                   <td className="border border-black p-2">
-                    {formatSummaryMoney(row.contractLabor)}
+                    {formatSummaryMoney(row.contractLaborPrice)}
                   </td>
+                  {costMode && (
+                    <td className="border border-black p-2">
+                      {formatSummaryMoney(row.lumpSumCost)}
+                    </td>
+                  )}
                   <td className="border border-black p-2">
-                    {formatSummaryMoney(row.lumpSum)}
+                    {formatSummaryMoney(row.lumpSumPrice)}
                   </td>
+                  {costMode && (
+                    <td className="border border-black p-2">
+                      {formatSummaryMoney(row.totalCost)}
+                    </td>
+                  )}
                   <td className="border border-black p-2">
-                    {formatSummaryMoney(row.total)}
+                    {formatSummaryMoney(row.totalPrice)}
                   </td>
                   <td className="border border-black p-2">{row.startDate}</td>
                   <td className="border border-black p-2">{row.completionDate}</td>
@@ -239,6 +290,77 @@ function CustomerSummaryBlock({ customer, onRemove }) {
             )}
           </tbody>
         </table>
+      </div>
+
+      <div className="flex justify-end mt-3">
+        <button
+          type="button"
+          onClick={openExportModal}
+          disabled={loading || !rows.length}
+          data-toggle="modal"
+          data-target={`#${exportModalId}`}
+          className="px-6 py-2 text-sm font-bold text-white bg-[#1e3a8a] rounded disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          EXPORT
+        </button>
+      </div>
+
+      <div
+        className="modal fade"
+        id={exportModalId}
+        tabIndex={-1}
+        role="dialog"
+        aria-labelledby={`${exportModalId}Title`}
+        aria-hidden="true"
+      >
+        <div className="modal-dialog modal-dialog-centered" role="document">
+          <div className="modal-content">
+            <div className="modal-header">
+              <h5 className="modal-title" id={`${exportModalId}Title`}>
+                Export Customer Summary
+              </h5>
+              <button
+                type="button"
+                className="close"
+                data-dismiss="modal"
+                aria-label="Close"
+              >
+                <span aria-hidden="true">×</span>
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group mb-0">
+                <label htmlFor={`${exportModalId}-documentName`}>Document Name</label>
+                <input
+                  type="text"
+                  className="form-control"
+                  id={`${exportModalId}-documentName`}
+                  placeholder="Enter document name"
+                  value={exportDocumentName}
+                  onChange={(e) => setExportDocumentName(e.target.value)}
+                  maxLength={200}
+                />
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                data-dismiss="modal"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                className="btn bg-[#00613e] text-white"
+                data-dismiss="modal"
+                onClick={handleDownloadCsv}
+              >
+                Download as CSV
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );

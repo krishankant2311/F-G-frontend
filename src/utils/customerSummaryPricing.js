@@ -164,12 +164,179 @@ export function summarizeLatestCustomerCopyBoth(project) {
   return {
     materialPrice: price.materialAmount,
     laborPrice: price.laborAmount,
-    contractLabor: price.contractLabor,
-    lumpSum: price.lumpSum,
-    total: price.total,
+    contractLaborPrice: price.contractLabor,
+    lumpSumPrice: price.lumpSum,
+    totalPrice: price.total,
     materialCost: cost.materialAmount,
-    laborCost: cost.laborAmount + cost.contractLabor,
+    laborCost: cost.laborAmount,
+    contractLaborCost: cost.contractLabor,
+    lumpSumCost: cost.lumpSum,
+    totalCost: cost.total,
   };
+}
+
+export function formatSummaryMoneyCsv(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n === 0) return "";
+  return n.toFixed(2);
+}
+
+/** Parse project date from API (ms, ISO, MM/DD/YYYY, etc.). */
+export function parseProjectDate(value) {
+  if (value == null || value === "") return null;
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    if (/^\d+$/.test(trimmed)) {
+      const d = new Date(Number(trimmed));
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+
+    const slashMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (slashMatch) {
+      const month = Number(slashMatch[1]);
+      const day = Number(slashMatch[2]);
+      const year = Number(slashMatch[3]);
+      const d = new Date(year, month - 1, day, 12, 0, 0);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+
+    const d = trimmed.includes("T")
+      ? new Date(trimmed)
+      : new Date(`${trimmed}T12:00:00`);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+export function formatProjectDate(value) {
+  const d = parseProjectDate(value);
+  if (!d) return "-";
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  return `${mm}/${dd}/${yyyy}`;
+}
+
+/** ISO date for CSV; tab prefix keeps Excel from misreading the column. */
+export function formatProjectDateForCsv(value) {
+  const d = parseProjectDate(value);
+  if (!d) return "";
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `\t${yyyy}-${mm}-${dd}`;
+}
+
+export function downloadCustomerSummaryCsv(
+  customerName,
+  rows,
+  { costMode = false, fileName = "" } = {}
+) {
+  if (!rows?.length) return false;
+
+  const escapeCsv = (value) => {
+    const s = String(value ?? "");
+    return `"${s.replace(/"/g, '""')}"`;
+  };
+
+  const headers = costMode
+    ? [
+        "Project",
+        "Description",
+        "Material Cost",
+        "Material Price",
+        "Labor Cost",
+        "Labor Price",
+        "Contract Labor Cost",
+        "Contract Labor Price",
+        "Lump Sum Cost",
+        "Lump Sum Price",
+        "Total Cost",
+        "Total Price",
+        "Start Date",
+        "Completion Date",
+        "Bid",
+      ]
+    : [
+        "Project",
+        "Description",
+        "Material Price",
+        "Labor Price",
+        "Contract Labor Price",
+        "Lump Sum Price",
+        "Total Price",
+        "Start Date",
+        "Completion Date",
+        "Bid",
+      ];
+
+  const body = rows.map((row) => {
+    if (costMode) {
+      return [
+        row.projectCode,
+        row.description,
+        formatSummaryMoneyCsv(row.materialCost),
+        formatSummaryMoneyCsv(row.materialPrice),
+        formatSummaryMoneyCsv(row.laborCost),
+        formatSummaryMoneyCsv(row.laborPrice),
+        formatSummaryMoneyCsv(row.contractLaborCost),
+        formatSummaryMoneyCsv(row.contractLaborPrice),
+        formatSummaryMoneyCsv(row.lumpSumCost),
+        formatSummaryMoneyCsv(row.lumpSumPrice),
+        formatSummaryMoneyCsv(row.totalCost),
+        formatSummaryMoneyCsv(row.totalPrice),
+        formatProjectDateForCsv(row.startDateRaw),
+        formatProjectDateForCsv(row.completionDateRaw),
+        row.isBid,
+      ];
+    }
+    return [
+      row.projectCode,
+      row.description,
+      formatSummaryMoneyCsv(row.materialPrice),
+      formatSummaryMoneyCsv(row.laborPrice),
+      formatSummaryMoneyCsv(row.contractLaborPrice),
+      formatSummaryMoneyCsv(row.lumpSumPrice),
+      formatSummaryMoneyCsv(row.totalPrice),
+      formatProjectDateForCsv(row.startDateRaw),
+      formatProjectDateForCsv(row.completionDateRaw),
+      row.isBid,
+    ];
+  });
+
+  const csv = [headers, ...body]
+    .map((line) => line.map(escapeCsv).join(","))
+    .join("\r\n");
+
+  const safeName = String(fileName || customerName || "customer")
+    .replace(/[^\w\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-");
+  const stamp = new Date().toISOString().slice(0, 10);
+  const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${safeName || "customer-summary"}-${stamp}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+  return true;
 }
 
 export function formatSummaryMoney(value) {
@@ -179,16 +346,6 @@ export function formatSummaryMoney(value) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
-}
-
-export function formatProjectDate(ms) {
-  if (!ms) return "-";
-  const d = new Date(Number(ms));
-  if (Number.isNaN(d.getTime())) return "-";
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  const yyyy = d.getFullYear();
-  return `${mm}/${dd}/${yyyy}`;
 }
 
 const RECENT_KEY = "customerSummaryRecentSearches";

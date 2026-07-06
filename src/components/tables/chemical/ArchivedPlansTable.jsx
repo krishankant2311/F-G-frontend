@@ -248,10 +248,6 @@ export default function ArchivedPlansTable() {
           </div>
         </div>
 
-        <div className="px-4 py-2 text-sm text-gray-600 border-b">
-          Expired / archived customer plans. Use Restore to undo a mistaken rollover, or Delete to remove an archive record.
-        </div>
-
         <div className="card-body overflow-x-auto">
           <table className="table table-bordered table-striped text-center">
             <thead>

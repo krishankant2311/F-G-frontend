@@ -15,14 +15,18 @@ export const DEFAULT_ANNUAL_TREATMENTS = [
     cost: 80,
   },
   {
-    name: "FUNGAL TREATMENT (Headway G -BAG)",
+    name: "INSECTICIDE TREATMENT (PER 100G GAL.TANK)",
     qty: "",
     price: 100,
     lowerPrice: 70,
     cost: 80,
   },
+];
+
+/** Bag/bottle/unit chemicals — shown under OTHER CHEMICAL TREATMENTS, not the main schedule table. */
+export const OTHER_CHEMICAL_PROGRAM_TREATMENTS = [
   {
-    name: "INSECTICIDE TREATMENT (PER 100G GAL.TANK)",
+    name: "FUNGAL TREATMENT (Headway G -BAG)",
     qty: "",
     price: 100,
     lowerPrice: 70,
@@ -50,6 +54,66 @@ export const DEFAULT_ANNUAL_TREATMENTS = [
     cost: 80,
   },
 ];
+
+export function normalizeTreatmentNameKey(name) {
+  return String(name || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\./g, "")
+    .replace(/\s+/g, " ");
+}
+
+const OTHER_CHEMICAL_PROGRAM_NAME_KEYS = new Set(
+  OTHER_CHEMICAL_PROGRAM_TREATMENTS.map((t) => normalizeTreatmentNameKey(t.name))
+);
+
+export function isOtherChemicalProgramTreatment(name) {
+  return OTHER_CHEMICAL_PROGRAM_NAME_KEYS.has(normalizeTreatmentNameKey(name));
+}
+
+export function findOtherChemicalProgramTreatment(name) {
+  const key = normalizeTreatmentNameKey(name);
+  return (
+    OTHER_CHEMICAL_PROGRAM_TREATMENTS.find(
+      (t) => normalizeTreatmentNameKey(t.name) === key
+    ) || null
+  );
+}
+
+/** Show bag/bottle program treatments inside the same list as chemical mixes. */
+export function augmentChemicalMixesWithProgramTreatments(
+  chemicalMixes = [],
+  isChemicalMaintenanceEnabled = false
+) {
+  const maintenance =
+    isChemicalMaintenanceEnabled === true ||
+    isChemicalMaintenanceEnabled === "true" ||
+    isChemicalMaintenanceEnabled === "Yes" ||
+    isChemicalMaintenanceEnabled === "yes" ||
+    isChemicalMaintenanceEnabled === 1 ||
+    isChemicalMaintenanceEnabled === "1";
+
+  const existingNames = new Set(
+    (chemicalMixes || []).map((mix) => normalizeTreatmentNameKey(mix?.mixName))
+  );
+
+  const programAsMixes = OTHER_CHEMICAL_PROGRAM_TREATMENTS.filter(
+    (t) => !existingNames.has(normalizeTreatmentNameKey(t.name))
+  ).map((t) => ({
+    _id: `program-treatment-${normalizeTreatmentNameKey(t.name)}`,
+    mixName: t.name,
+    totalPricePerTank: maintenance ? t.lowerPrice ?? t.price ?? 0 : t.price ?? 0,
+    totalCostPerTank: t.cost ?? 0,
+    chemicals: [],
+    _isProgramTreatment: true,
+  }));
+
+  return [...(chemicalMixes || []), ...programAsMixes];
+}
+
+export function filterAnnualProgramTreatments(rows = []) {
+  return (rows || []).filter((row) => !isOtherChemicalProgramTreatment(row?.name));
+}
 
 export function mapApiTreatmentToAnnualRow(item) {
   return {
@@ -80,6 +144,7 @@ export function buildAnnualTreatmentsFromCatalog(apiItems = [], localItems = [])
   for (const item of apiAnnual) {
     const name = String(item.treatmentName || "").trim();
     if (!name) continue;
+    if (isOtherChemicalProgramTreatment(name)) continue;
     const key = norm(name);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -97,6 +162,7 @@ export function buildAnnualTreatmentsFromCatalog(apiItems = [], localItems = [])
   for (const item of localAnnual) {
     const name = String(item.treatmentName || "").trim();
     if (!name) continue;
+    if (isOtherChemicalProgramTreatment(name)) continue;
     const key = norm(name);
     if (seen.has(key)) continue;
     seen.add(key);
