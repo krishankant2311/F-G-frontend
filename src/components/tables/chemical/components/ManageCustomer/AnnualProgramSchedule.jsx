@@ -7,7 +7,6 @@ import "react-toastify/dist/ReactToastify.css";
 import ViewTreatmentDetails from "../Dashboard/ViewCustomer";
 import EditCustomer from "../Dashboard/EditCustomer";
 import { getCustomLocalTreatments } from "../../../../../utils/otherTreatmentLocalStore";
-import { saveHighlightedArchivedPlan } from "../../../../../utils/archivedPlanHighlight";
 import {
   CATALOG_OPTION_PREFIX,
   fetchActiveMaterials,
@@ -854,6 +853,7 @@ const CustomerAnnualProgramSchedule = () => {
         customerEmail: customer.customerEmail || "",
         customerPhone: customer.customerPhone || "",
         jobAddress: customer.jobAddress,
+        contractTotal: customer.contractTotal ?? 0,
         isChemicalMaintenanceEnabled: !!customer.isChemicalMaintenanceEnabled,
         annualTreatments: (customer.annualTreatments || []).map((t, i) => {
           if (item.type === "annual" && i === item.originalIndex) {
@@ -991,10 +991,6 @@ const CustomerAnnualProgramSchedule = () => {
     if (updateRes.data.success) {
       toast.success("Schedule updated successfully", { toastId: SCHEDULE_SUCCESS_TOAST_ID });
 
-      if (updateRes.data.archivedPlan) {
-        saveHighlightedArchivedPlan(updateRes.data.archivedPlan);
-      }
-
       const customerForUi = {
         ...(fallbackCustomer || {}),
         ...(updateRes.data.data || {}),
@@ -1016,6 +1012,7 @@ const CustomerAnnualProgramSchedule = () => {
           updateRes.data.data?.jobAddress ??
           fallbackCustomer?.jobAddress,
         contractTotal:
+          payload.contractTotal ??
           updateRes.data.data?.contractTotal ??
           fallbackCustomer?.contractTotal ??
           0,
@@ -1379,10 +1376,10 @@ const CustomerAnnualProgramSchedule = () => {
         customerEmail: currentCustomer.customerEmail,
         customerPhone: currentCustomer.customerPhone,
         jobAddress: currentCustomer.jobAddress,
+        contractTotal: currentCustomer.contractTotal ?? 0,
         isChemicalMaintenanceEnabled: currentCustomer.isChemicalMaintenanceEnabled,
         annualTreatments: updatedAnnualTreatmentsWithoutOtherChemical,
         otherTreatments: updatedOtherTreatments,
-        archivePreviousPlan: true,
       };
 
       // Warning rule: show confirmation when remaining annual balance falls below/equal $50.
@@ -1767,8 +1764,8 @@ const CustomerAnnualProgramSchedule = () => {
               <th className="p-2 border">TREATMENT</th>
               <th className="p-2 border">QUANTITY</th>
               <th className="p-2 border">SCHEDULE DATE</th>
-              <th className="p-2 border">PRICE</th>
               <th className="p-2 border">COST</th>
+              <th className="p-2 border">PRICE</th>
               <th className="p-2 border">ACTION</th>
             </tr>
           </thead>
@@ -2000,21 +1997,6 @@ const CustomerAnnualProgramSchedule = () => {
                     })()}
                   </td>
 
-                  {/* Price */}
-                  <td className="border p-2">
-                    <input
-                      type="number"
-                      value={item.price ?? ""}
-                      min="0"
-                      step="0.01"
-                      onChange={(e) =>
-                        handleOtherTreatmentChange(index, "price", e.target.value)
-                      }
-                      className="w-full border px-2 py-1"
-                      placeholder="0.00"
-                    />
-                  </td>
-
                   {/* Cost */}
                   <td className="border p-2">
                     <input
@@ -2024,6 +2006,21 @@ const CustomerAnnualProgramSchedule = () => {
                       step="0.01"
                       onChange={(e) =>
                         handleOtherTreatmentChange(index, "cost", e.target.value)
+                      }
+                      className="w-full border px-2 py-1"
+                      placeholder="0.00"
+                    />
+                  </td>
+
+                  {/* Price */}
+                  <td className="border p-2">
+                    <input
+                      type="number"
+                      value={item.price ?? ""}
+                      min="0"
+                      step="0.01"
+                      onChange={(e) =>
+                        handleOtherTreatmentChange(index, "price", e.target.value)
                       }
                       className="w-full border px-2 py-1"
                       placeholder="0.00"
@@ -2080,8 +2077,8 @@ const CustomerAnnualProgramSchedule = () => {
               <th className="p-2 border">TREATMENT</th>
               <th className="p-2 border">QUANTITY</th>
               <th className="p-2 border">SCHEDULE DATE</th>
-              <th className="p-2 border">PRICE</th>
               <th className="p-2 border">COST</th>
+              <th className="p-2 border">PRICE</th>
               <th className="p-2 border">ACTION</th>
             </tr>
           </thead>
@@ -2281,11 +2278,11 @@ const CustomerAnnualProgramSchedule = () => {
                   <td className="border p-2">
                     <input
                       type="number"
-                      value={item.price ?? ""}
+                      value={item.cost ?? ""}
                       min="0"
                       step="0.01"
                       onChange={(e) =>
-                        handleOtherChemicalTreatmentChange(index, "price", e.target.value)
+                        handleOtherChemicalTreatmentChange(index, "cost", e.target.value)
                       }
                       className="w-full border px-2 py-1"
                       placeholder="0.00"
@@ -2294,11 +2291,11 @@ const CustomerAnnualProgramSchedule = () => {
                   <td className="border p-2">
                     <input
                       type="number"
-                      value={item.cost ?? ""}
+                      value={item.price ?? ""}
                       min="0"
                       step="0.01"
                       onChange={(e) =>
-                        handleOtherChemicalTreatmentChange(index, "cost", e.target.value)
+                        handleOtherChemicalTreatmentChange(index, "price", e.target.value)
                       }
                       className="w-full border px-2 py-1"
                       placeholder="0.00"
@@ -2383,6 +2380,7 @@ const CustomerAnnualProgramSchedule = () => {
                     state: {
                       customerName: fresh.customerName,
                       customerId: fresh._id,
+                      contractTotal: fresh.contractTotal ?? 0,
                       isChemicalMaintenanceEnabled: !!fresh.isChemicalMaintenanceEnabled,
                       treatments: fresh.treatments,
                       annualTreatments: fresh.annualTreatments,

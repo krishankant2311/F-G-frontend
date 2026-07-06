@@ -65,6 +65,7 @@ export default function ManageCustomersPreviousPlansSection({ refreshToken = 0 }
   const [expandedPlanId, setExpandedPlanId] = useState(null);
   const [viewPlan, setViewPlan] = useState(null);
   const [showViewModal, setShowViewModal] = useState(false);
+  const [actionLoadingId, setActionLoadingId] = useState("");
 
   const fetchRecentArchivedPlans = useCallback(async () => {
     try {
@@ -121,6 +122,35 @@ export default function ManageCustomersPreviousPlansSection({ refreshToken = 0 }
       }
     } catch (error) {
       toast.error(error.response?.data?.message || "Failed to load archived plan");
+    }
+  };
+
+  const handleDelete = async (item) => {
+    if (!item?._id || actionLoadingId) return;
+    const confirmed = window.confirm(
+      `Delete archived plan for "${item.customerName}" (${item.planYear})?\n\nThis only removes the archive record. The active customer plan is not changed.`
+    );
+    if (!confirmed) return;
+
+    try {
+      setActionLoadingId(item._id);
+      const token = localStorage.getItem("f&gstafftoken");
+      const response = await axios.delete(
+        `${process.env.REACT_APP_API_BASE_URL}/chemical-maintenance/archived-plans/${item._id}`,
+        { headers: { token } }
+      );
+      if (response.data.success) {
+        toast.success(response.data.message || "Archived plan deleted");
+        if (expandedPlanId === item._id) setExpandedPlanId(null);
+        if (highlightPlanId === item._id) setHighlightPlanId(null);
+        fetchRecentArchivedPlans();
+      } else {
+        toast.error(response.data.message || "Delete failed");
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Delete failed");
+    } finally {
+      setActionLoadingId("");
     }
   };
 
@@ -191,6 +221,14 @@ export default function ManageCustomersPreviousPlansSection({ refreshToken = 0 }
                           onClick={() => openViewModal(item._id)}
                         >
                           <i className="fa fa-eye" />
+                        </button>
+                        <button
+                          type="button"
+                          title="Delete archive record"
+                          onClick={() => handleDelete(item)}
+                          disabled={actionLoadingId === item._id}
+                        >
+                          <i className="fa fa-trash" />
                         </button>
                       </td>
                     </tr>
