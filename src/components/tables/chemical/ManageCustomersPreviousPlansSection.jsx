@@ -61,6 +61,10 @@ const buildTreatmentPreviewRows = (plan) => {
 export default function ManageCustomersPreviousPlansSection({ refreshToken = 0 }) {
   const [plans, setPlans] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalRecords, setTotalRecords] = useState(0);
+  const [perPageRecords] = useState(10);
   const [highlightPlanId, setHighlightPlanId] = useState(null);
   const [expandedPlanId, setExpandedPlanId] = useState(null);
   const [viewPlan, setViewPlan] = useState(null);
@@ -78,8 +82,8 @@ export default function ManageCustomersPreviousPlansSection({ refreshToken = 0 }
         {
           headers: { token },
           params: {
-            page: 1,
-            limit: 8,
+            page: currentPage,
+            limit: perPageRecords,
             sortby: "archivedAt",
             sortorder: -1,
           },
@@ -87,14 +91,21 @@ export default function ManageCustomersPreviousPlansSection({ refreshToken = 0 }
       );
 
       if (response.data.success) {
-        setPlans(response.data.data?.plans || []);
+        const data = response.data.data || {};
+        setPlans(data.plans || []);
+        setTotalPages(data.totalPages || 1);
+        setTotalRecords(data.totalRecords || 0);
       }
     } catch (error) {
       console.error("Failed to load previous plans:", error);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [currentPage, perPageRecords]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [refreshToken]);
 
   useEffect(() => {
     const highlight = consumeHighlightedArchivedPlan();
@@ -154,7 +165,19 @@ export default function ManageCustomersPreviousPlansSection({ refreshToken = 0 }
     }
   };
 
-  if (!loading && plans.length === 0) {
+  const previousPage = () => {
+    if (currentPage <= 1) return;
+    setExpandedPlanId(null);
+    setCurrentPage(currentPage - 1);
+  };
+
+  const nextPage = () => {
+    if (currentPage >= totalPages) return;
+    setExpandedPlanId(null);
+    setCurrentPage(currentPage + 1);
+  };
+
+  if (!loading && totalRecords === 0) {
     return (
       <div className="card mt-6">
         <div className="card-header bg-[#00613e] text-white py-3 px-4">
@@ -199,7 +222,7 @@ export default function ManageCustomersPreviousPlansSection({ refreshToken = 0 }
                 return (
                   <React.Fragment key={item._id}>
                     <tr className={isHighlighted ? "bg-green-50" : undefined}>
-                      <td className="text-left">{item.customerName}</td>
+                      <td>{item.customerName}</td>
                       <td>{item.planYear}</td>
                       <td>{reasonLabel(item)}</td>
                       <td>{formatMoney(billing.contractTotal)}</td>
@@ -282,6 +305,55 @@ export default function ManageCustomersPreviousPlansSection({ refreshToken = 0 }
               })}
             </tbody>
           </table>
+
+          <div className="flex lg:flex-row flex-col lg:items-end items-center justify-between px-4 py-3">
+            <div>
+              <p className="mb-0">
+                Showing{" "}
+                {totalRecords === 0
+                  ? 0
+                  : perPageRecords * currentPage - (perPageRecords - 1)}{" "}
+                to{" "}
+                {currentPage * perPageRecords > totalRecords
+                  ? totalRecords
+                  : currentPage * perPageRecords}{" "}
+                of {totalRecords} entries
+              </p>
+            </div>
+            <div className="flex justify-end mt-2 lg:mt-0">
+              <button
+                type="button"
+                className="bg-[#00613e] text-white px-2 py-1"
+                onClick={previousPage}
+                disabled={currentPage <= 1}
+              >
+                Previous
+              </button>
+              {Array.from({ length: totalPages }, (_, i) => (
+                <button
+                  type="button"
+                  className={`border-x px-[10px] py-1 ${
+                    currentPage === i + 1 ? "bg-[#00613e] text-white" : ""
+                  }`}
+                  key={i}
+                  onClick={() => {
+                    setExpandedPlanId(null);
+                    setCurrentPage(i + 1);
+                  }}
+                >
+                  {i + 1}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="bg-[#00613e] text-white px-2 py-1"
+                onClick={nextPage}
+                disabled={currentPage >= totalPages}
+              >
+                Next
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

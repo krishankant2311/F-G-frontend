@@ -131,9 +131,8 @@ export default function ManageCustomersTable() {
             page: currentPage,
             limit: perPageRecords,
             search: debouncedTerm || "",
-            // fall back to createdAt if no explicit sort selected
-            sortby: sortBy || "createdAt",
-            sortorder: sortOrder === "asc" ? 1 : -1,
+            sortby: sortBy || "updatedAt",
+            sortorder: sortBy ? (sortOrder === "asc" ? 1 : -1) : -1,
           },
         },
       );
@@ -176,6 +175,12 @@ export default function ManageCustomersTable() {
               if (aValue < bValue) return sortOrder === "asc" ? -1 : 1;
               if (aValue > bValue) return sortOrder === "asc" ? 1 : -1;
               return 0;
+            });
+          } else {
+            customers.sort((a, b) => {
+              const aTime = new Date(a.updatedAt || a.createdAt || 0).getTime();
+              const bTime = new Date(b.updatedAt || b.createdAt || 0).getTime();
+              return bTime - aTime;
             });
           }
 
