@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useTableContext } from "../../../../../context/TableContext";
 import axios from "axios";
@@ -33,6 +33,13 @@ import {
   scheduleItemAppliesLabor,
 } from "../../../../../utils/otherTreatmentCategory";
 import { isOtherChemicalProgramTreatment, normalizeTreatmentNameKey } from "../../../../../utils/otherTreatmentDefaults";
+import {
+  resolveAnnualUnitCost,
+  resolveAnnualUnitPrice,
+  resolveOtherTreatmentCostPerTank,
+  resolveScheduleRowUnitCost,
+  money2,
+} from "../../../../../utils/scheduleTreatmentPricing";
 
 const CustomerAnnualProgramSchedule = () => {
   const { customerId: paramCustomerId } = useParams();
@@ -159,6 +166,7 @@ const CustomerAnnualProgramSchedule = () => {
   // chemical mixes + catalog for OTHER CHEMICAL TREATMENTS dropdown; materials for OTHER TREATMENTS
   const [chemicalMixes, setChemicalMixes] = useState([]);
   const [catalogTreatments, setCatalogTreatments] = useState([]);
+  const [catalogLookupTreatments, setCatalogLookupTreatments] = useState([]);
   const [materials, setMaterials] = useState([]);
 
   const emptyOtherFormRow = () => ({
@@ -221,9 +229,8 @@ const CustomerAnnualProgramSchedule = () => {
 
       if (res.data.statusCode === 200) {
         const items = res.data.result?.treatments || [];
-        const localOther = getCustomLocalTreatments().filter(
-          (t) => t.programType === "other"
-        );
+        const localCustom = getCustomLocalTreatments();
+        const localOther = localCustom.filter((t) => t.programType === "other");
         const apiCatalog = items.filter((t) => t.programType === "other");
         const seen = new Set(
           apiCatalog.map((t) => String(t.treatmentName).trim().toUpperCase())
@@ -234,12 +241,24 @@ const CustomerAnnualProgramSchedule = () => {
             (t) => !seen.has(String(t.treatmentName).trim().toUpperCase())
           ),
         ]);
+
+        const lookupSeen = new Set(
+          items.map((t) => String(t.treatmentName).trim().toUpperCase())
+        );
+        setCatalogLookupTreatments([
+          ...items,
+          ...localCustom.filter(
+            (t) =>
+              !lookupSeen.has(String(t.treatmentName).trim().toUpperCase())
+          ),
+        ]);
       }
     } catch (error) {
       console.error("Failed to load treatment catalog:", error);
       setCatalogTreatments(
         getCustomLocalTreatments().filter((t) => t.programType === "other")
       );
+      setCatalogLookupTreatments(getCustomLocalTreatments());
     }
   };
 
@@ -372,6 +391,32 @@ const CustomerAnnualProgramSchedule = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]); // Run when state changes
 
+  const maintenanceEnabledForCost = useMemo(() => {
+    const flag = state?.isChemicalMaintenanceEnabled ?? true;
+    return (
+      flag === true ||
+      flag === "true" ||
+      flag === "Yes" ||
+      flag === "yes" ||
+      flag === 1 ||
+      flag === "1"
+    );
+  }, [state?.isChemicalMaintenanceEnabled]);
+
+  const scheduleCostContext = useMemo(
+    () => ({
+      chemicalMixes,
+      catalogTreatments: catalogLookupTreatments,
+      materials,
+      isChemicalMaintenanceEnabled: maintenanceEnabledForCost,
+    }),
+    [
+      chemicalMixes,
+      catalogLookupTreatments,
+      materials,
+      maintenanceEnabledForCost,
+    ]
+  );
 
  
   if (stateLoading) {
@@ -421,9 +466,12 @@ const CustomerAnnualProgramSchedule = () => {
     const qty = wholeQuantity(at.quantity || 0);
     const savedPrice = at.price || 0;
     const savedCost = at.cost || 0;
-    // Unit price: if quantity exists, divide price by quantity; otherwise use default 100
-    const unitPrice = qty > 0 ? (savedPrice / qty) : 100;
-    const unitCost = qty > 0 ? (savedCost / qty) : 80;
+    const unitPrice = resolveAnnualUnitPrice({ price: savedPrice, quantity: qty });
+    const unitCost = resolveAnnualUnitCost(
+      { cost: savedCost, price: savedPrice, quantity: qty, treatmentName: at.name },
+      scheduleCostContext
+    );
+    const effectiveCost = savedCost > 0 ? savedCost : money2(unitCost * qty);
 
     const ds = Array.isArray(at.scheduleDates) && at.scheduleDates.length > 0
       ? at.scheduleDates
@@ -436,7 +484,7 @@ const CustomerAnnualProgramSchedule = () => {
         quantity: qty,
         scheduledDate: null,
         price: savedPrice, // Will be recalculated when quantity changes
-        cost: savedCost,
+        cost: effectiveCost,
         unitPrice,
         unitCost,
         projectCode: at.projectCode || "",
@@ -451,7 +499,7 @@ const CustomerAnnualProgramSchedule = () => {
       quantity: qty,
       scheduledDate: d,
       price: savedPrice,
-      cost: savedCost,
+      cost: effectiveCost,
       unitPrice,
       unitCost,
       projectCode: at.projectCode || "",
@@ -476,8 +524,12 @@ const CustomerAnnualProgramSchedule = () => {
       const qty = wholeQuantity(at.quantity || 0);
       const savedPrice = at.price || 0;
       const savedCost = at.cost || 0;
-      const unitPrice = qty > 0 ? savedPrice / qty : 100;
-      const unitCost = qty > 0 ? savedCost / qty : 80;
+      const unitPrice = resolveAnnualUnitPrice({ price: savedPrice, quantity: qty });
+      const unitCost = resolveAnnualUnitCost(
+        { cost: savedCost, price: savedPrice, quantity: qty, treatmentName: at.name },
+        scheduleCostContext
+      );
+      const effectiveCost = savedCost > 0 ? savedCost : money2(unitCost * qty);
 
       const ds =
         Array.isArray(at.scheduleDates) && at.scheduleDates.length > 0
@@ -493,7 +545,7 @@ const CustomerAnnualProgramSchedule = () => {
             quantity: qty,
             scheduledDate: null,
             price: savedPrice,
-            cost: savedCost,
+            cost: effectiveCost,
             unitPrice,
             unitCost,
             projectCode: at.projectCode || "",
@@ -510,7 +562,7 @@ const CustomerAnnualProgramSchedule = () => {
         quantity: qty,
         scheduledDate: d,
         price: savedPrice,
-        cost: savedCost,
+        cost: effectiveCost,
         unitPrice,
         unitCost,
         projectCode: at.projectCode || "",
@@ -528,8 +580,17 @@ const CustomerAnnualProgramSchedule = () => {
     if (!hasValidOtherTreatmentDate(resolvedDate)) return [];
 
     const qty = wholeQuantity(resolveOtherTreatmentQuantity(ot));
-    const costPerTank = Number(ot.totalCostPerTank || 0);
     const pricePerTank = Number(ot.totalPricePerTank || 0);
+    const costPerTank = resolveOtherTreatmentCostPerTank(
+      {
+        totalCostPerTank: ot.totalCostPerTank,
+        treatmentName: resolveOtherTreatmentName(ot),
+        mixId: ot.mixId,
+        materialId: ot.materialId,
+        treatmentCatalogId: ot.treatmentCatalogId,
+      },
+      scheduleCostContext
+    );
 
     return [{
       treatment: resolveOtherTreatmentName(ot),
@@ -539,6 +600,9 @@ const CustomerAnnualProgramSchedule = () => {
       cost: qty * costPerTank,
       unitPrice: pricePerTank,
       unitCost: costPerTank,
+      mixId: ot.mixId,
+      materialId: ot.materialId,
+      treatmentCatalogId: ot.treatmentCatalogId,
       projectCode: ot.projectCode || "",
       type: "other",
       originalIndex,
@@ -635,11 +699,7 @@ const CustomerAnnualProgramSchedule = () => {
   const programCostTotal = visibleScheduledTreatments.reduce((sum, t, index) => {
     const qtyKey = getQtyKey(t);
     const currentQty = rowQty[qtyKey] !== undefined ? wholeQuantity(rowQty[qtyKey]) : wholeQuantity(t.quantity || 0);
-    const baseQty = Number(t.quantity) || 0;
-    const baseCost = Number(t.cost) || 0;
-    const unitCost =
-      t.unitCost ??
-      (baseQty > 0 ? (baseCost / baseQty) : 0);
+    const unitCost = resolveScheduleRowUnitCost(t, scheduleCostContext);
     return sum + (currentQty * (Number(unitCost) || 0));
   }, 0);
 
@@ -874,7 +934,16 @@ const CustomerAnnualProgramSchedule = () => {
             updated.quantity = newQuantity;
             updated.price = newPrice;
             if (newProjectCode !== undefined) updated.projectCode = newProjectCode;
-            if (t.unitCost && newQuantity > 0) updated.cost = t.unitCost * newQuantity;
+            const unitCost = resolveAnnualUnitCost(
+              {
+                cost: t.cost,
+                price: t.price,
+                quantity: t.quantity,
+                treatmentName: t.name,
+              },
+              scheduleCostContext
+            );
+            if (newQuantity > 0) updated.cost = money2(unitCost * newQuantity);
             return updated;
           }
           return t;
@@ -886,7 +955,17 @@ const CustomerAnnualProgramSchedule = () => {
             updated.qty = newQuantity;
             updated.totalPricePerTank = newPrice;
             if (newProjectCode !== undefined) updated.projectCode = newProjectCode;
-            if (t.unitCost && newQuantity > 0) updated.totalCostPerTank = t.unitCost * newQuantity;
+            const costPerTank = resolveOtherTreatmentCostPerTank(
+              {
+                totalCostPerTank: t.totalCostPerTank,
+                treatmentName: resolveOtherTreatmentName(t),
+                mixId: t.mixId,
+                materialId: t.materialId,
+                treatmentCatalogId: t.treatmentCatalogId,
+              },
+              scheduleCostContext
+            );
+            updated.totalCostPerTank = costPerTank;
             return updated;
           }
           return t;
@@ -1227,7 +1306,15 @@ const CustomerAnnualProgramSchedule = () => {
         const savedPrice = Number(at.price) || 0;
         const savedCost = Number(at.cost) || 0;
         const unitPrice = originalQty > 0 && savedPrice > 0 ? savedPrice / originalQty : 100;
-        const unitCost = originalQty > 0 && savedCost > 0 ? savedCost / originalQty : 80;
+        const unitCost = resolveAnnualUnitCost(
+          {
+            cost: savedCost,
+            price: savedPrice,
+            quantity: originalQty,
+            treatmentName: at.name,
+          },
+          scheduleCostContext
+        );
 
         // If no schedule dates, keep single row (unscheduled template row)
         if (!updatedScheduleDates || updatedScheduleDates.length === 0) {
@@ -1295,6 +1382,16 @@ const CustomerAnnualProgramSchedule = () => {
           qty: updatedQty,
           projectCode: updatedProjectCode,
           status: ot.status || "Scheduled",
+          totalCostPerTank: resolveOtherTreatmentCostPerTank(
+            {
+              totalCostPerTank: ot.totalCostPerTank,
+              treatmentName: resolveOtherTreatmentName(ot),
+              mixId: ot.mixId,
+              materialId: ot.materialId,
+              treatmentCatalogId: ot.treatmentCatalogId,
+            },
+            scheduleCostContext
+          ),
         };
         
         console.log(`Updated other treatment ${index}:`, {
@@ -1539,13 +1636,8 @@ const CustomerAnnualProgramSchedule = () => {
                     <td className="border p-2 whitespace-nowrap">
                       {(() => {
                         const currentQty = rowQty[qtyKey] !== undefined ? wholeQuantity(rowQty[qtyKey]) : wholeQuantity(item.quantity || 0);
-                        // annual rows carry unitCost; other rows don't always, so compute defensively from total cost
-                        const unitCost =
-                          item.unitCost ??
-                          (Number(item.quantity) > 0
-                            ? Number(item.cost) / Number(item.quantity)
-                            : 0);
-                        const displayCost = currentQty * (Number(unitCost) || 0);
+                        const unitCost = resolveScheduleRowUnitCost(item, scheduleCostContext);
+                        const displayCost = currentQty * unitCost;
                         // No space after "$" to avoid wrapping into two lines
                         return `$${Number(displayCost).toFixed(2)}`;
                       })()}
@@ -1561,12 +1653,8 @@ const CustomerAnnualProgramSchedule = () => {
                       {(() => {
                         const currentQty = rowQty[qtyKey] !== undefined ? wholeQuantity(rowQty[qtyKey]) : wholeQuantity(item.quantity || 0);
                         if (currentQty <= 0) return "$0.00";
-                        const unitCost =
-                          item.unitCost ??
-                          (Number(item.quantity) > 0
-                            ? Number(item.cost) / Number(item.quantity)
-                            : 0);
-                        const chemicalCost = currentQty * (Number(unitCost) || 0);
+                        const unitCost = resolveScheduleRowUnitCost(item, scheduleCostContext);
+                        const chemicalCost = currentQty * unitCost;
                         if (!scheduleItemAppliesLabor(item)) {
                           return `$${Number(chemicalCost).toFixed(2)}`;
                         }
@@ -1596,12 +1684,8 @@ const CustomerAnnualProgramSchedule = () => {
                       {(() => {
                         const currentQty = rowQty[qtyKey] !== undefined ? wholeQuantity(rowQty[qtyKey]) : wholeQuantity(item.quantity || 0);
                         if (currentQty <= 0) return "$0.00";
-                        const unitCost =
-                          item.unitCost ??
-                          (Number(item.quantity) > 0
-                            ? Number(item.cost) / Number(item.quantity)
-                            : 0);
-                        const chemicalCost = currentQty * (Number(unitCost) || 0);
+                        const unitCost = resolveScheduleRowUnitCost(item, scheduleCostContext);
+                        const chemicalCost = currentQty * unitCost;
                         const unitPrice = item.unitPrice ?? (item.quantity > 0 ? (item.price / item.quantity) : 100);
                         if (!scheduleItemAppliesLabor(item)) {
                           return `$${Number(currentQty * unitPrice).toFixed(2)}`;
