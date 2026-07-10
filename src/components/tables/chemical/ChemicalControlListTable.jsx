@@ -6,7 +6,6 @@ import "react-toastify/dist/ReactToastify.css";
 import { useTableContext } from "../../../context/TableContext";
 import {
   buildChemicalCustomerNavState,
-  formatControlListDate,
   formatControlListMoney,
   summarizeChemicalCustomer,
 } from "../../../utils/chemicalCustomerSummary";
@@ -122,8 +121,6 @@ export default function ChemicalControlListTable() {
                   <th>Annual Amount ($)</th>
                   <th>Used to Date ($)</th>
                   <th>Remaining Amount ($)</th>
-                  <th>Start Date</th>
-                  <th>End Date</th>
                 </tr>
               </thead>
               <tbody>
@@ -160,8 +157,6 @@ export default function ChemicalControlListTable() {
                       >
                         $ {formatControlListMoney(row.remainingAmount)}
                       </td>
-                      <td>{formatControlListDate(row.startDate) || "-"}</td>
-                      <td>{formatControlListDate(row.endDate) || "-"}</td>
                     </tr>
                   );
                 })}
@@ -174,7 +169,6 @@ export default function ChemicalControlListTable() {
                   <td>$ {formatControlListMoney(totals.annualAmount)}</td>
                   <td>$ {formatControlListMoney(totals.usedToDate)}</td>
                   <td>$ {formatControlListMoney(totals.remainingAmount)}</td>
-                  <td colSpan={2} />
                 </tr>
               </tfoot>
             </table>

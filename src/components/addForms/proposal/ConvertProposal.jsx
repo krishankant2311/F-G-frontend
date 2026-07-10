@@ -912,7 +912,7 @@ export default function ConvertProposal() {
                             value={formData.jobName}
                             onChange={(e) => handleInputChange(formIndex, e)}
                             name="jobName"
-                            maxLength={50}
+                            maxLength={100}
                             autoComplete="off"
                             // required
                           />

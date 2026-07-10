@@ -865,7 +865,7 @@ export default function EditBidProjectForm() {
                     value={formData.jobName}
                     onChange={handleInputChange}
                     name="jobName"
-                    maxLength={50}
+                    maxLength={100}
                     autoComplete="off"
                     // required
                   />

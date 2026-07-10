@@ -1514,17 +1514,64 @@ const CustomerAnnualProgramSchedule = () => {
         }, 0);
 
       const usedAmount = completedAnnualAmount + completedOtherAmount;
-      const remainingAmount = annualProgramTotal - usedAmount;
+      const programRemainingAmount = annualProgramTotal - usedAmount;
 
-      if (remainingAmount <= 50) {
+      const previousAnnualWithoutOtherChemical = (currentCustomer.annualTreatments || []).filter(
+        (at) => !isOtherChemicalProgramTreatment(at.name)
+      );
+      const previousScheduledAnnualAmount = previousAnnualWithoutOtherChemical
+        .filter((at) => at.scheduleDate)
+        .reduce((sum, at) => sum + toSafeNumber(at.price), 0);
+      const previousScheduledOtherAmount = (currentCustomer.otherTreatments || [])
+        .filter((ot) => hasValidOtherTreatmentDate(resolveOtherTreatmentDate(ot)))
+        .reduce((sum, ot) => {
+          const qty = toSafeNumber(ot.qty);
+          const pricePerTank = toSafeNumber(ot.totalPricePerTank);
+          return sum + qty * pricePerTank;
+        }, 0);
+      const previousScheduledProgramTotal =
+        previousScheduledAnnualAmount + previousScheduledOtherAmount;
+
+      const isAddingTreatments =
+        formattedNewOtherTreatments.length > 0 ||
+        scheduledOtherAfterMerge > scheduledOtherBeforeMerge ||
+        annualProgramTotal > previousScheduledProgramTotal + 0.005;
+      const isDeletingTreatments =
+        removedScheduleRowKeys.length > 0 ||
+        annualProgramTotal < previousScheduledProgramTotal - 0.005;
+
+      const contractTotalAmount = toSafeNumber(currentCustomer.contractTotal);
+      const storedUsedAmount = toSafeNumber(currentCustomer.materialsUsedToDate);
+      const effectiveUsedAmount =
+        contractTotalAmount > 0
+          ? Math.max(storedUsedAmount, usedAmount)
+          : usedAmount;
+      const contractRemainingAmount =
+        contractTotalAmount > 0
+          ? contractTotalAmount - effectiveUsedAmount
+          : null;
+      const balanceRemainingAmount =
+        contractRemainingAmount !== null
+          ? contractRemainingAmount
+          : programRemainingAmount;
+
+      // Skip warning when only deleting treatments; align amount with Usage and Billing Summary.
+      const skipBalanceWarning = isDeletingTreatments && !isAddingTreatments;
+
+      if (!skipBalanceWarning && balanceRemainingAmount <= 50) {
         console.log("Low balance warning triggered:", {
           annualProgramTotal,
           usedAmount,
-          remainingAmount,
+          effectiveUsedAmount,
+          programRemainingAmount,
+          contractRemainingAmount,
+          balanceRemainingAmount,
+          isDeletingTreatments,
+          isAddingTreatments,
         });
         setPendingUpdatePayload(updatePayload);
         setPendingUpdateFallbackCustomer(currentCustomer);
-        setPendingRemainingAmount(remainingAmount);
+        setPendingRemainingAmount(balanceRemainingAmount);
         setShowBalanceWarning(true);
         submitLockRef.current = false;
         setIsSubmitting(false);

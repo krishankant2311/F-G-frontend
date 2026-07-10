@@ -1176,7 +1176,7 @@ export default function StaffAddBidForm() {
                     value={formData.jobName}
                     onChange={handleInputChange}
                     name="jobName"
-                    maxLength={50}
+                    maxLength={100}
                     autoComplete="off"
                     // required
                   />
