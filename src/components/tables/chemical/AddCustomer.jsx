@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Layout from "../../layout/Layout";
 import axios from "axios";
 import { ToastContainer, toast } from "react-toastify";
@@ -9,6 +9,9 @@ import {
   DEFAULT_ANNUAL_TREATMENTS,
   buildAnnualTreatmentsFromCatalog,
   filterAnnualProgramTreatments,
+  filterTreatmentsByProgramType,
+  PROGRAM_TYPE_OTHER,
+  PROGRAM_TYPE_OTHER_CHEMICAL,
 } from "../../../utils/otherTreatmentDefaults";
 import { getCustomLocalTreatments } from "../../../utils/otherTreatmentLocalStore";
 import {
@@ -189,11 +192,36 @@ export default function AddCustomer() {
   const [materials, setMaterials] = useState([]);
   const [annualTreatments, setAnnualTreatments] = useState([]);
   const [annualCatalogLoading, setAnnualCatalogLoading] = useState(true);
-  const [catalogTreatments, setCatalogTreatments] = useState([]);
+  const [catalogAllItems, setCatalogAllItems] = useState([]);
   const [disableBtn, setDisableBtn] = useState(false);
   const navigate = useNavigate();
 
   const { tableSize } = useTableContext();
+
+  const otherTreatmentCatalog = useMemo(
+    () => filterTreatmentsByProgramType(catalogAllItems, PROGRAM_TYPE_OTHER),
+    [catalogAllItems]
+  );
+  const otherChemicalCatalog = useMemo(
+    () => filterTreatmentsByProgramType(catalogAllItems, PROGRAM_TYPE_OTHER_CHEMICAL),
+    [catalogAllItems]
+  );
+
+  const mergeCatalogLists = (apiItems = [], localItems = []) => {
+    const seen = new Set(
+      apiItems.map((t) => String(t.treatmentName || "").trim().toUpperCase())
+    );
+    const merged = [...apiItems];
+    localItems.forEach((item) => {
+      const name = String(item.treatmentName || "").trim();
+      if (!name) return;
+      const key = name.toUpperCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      merged.push(item);
+    });
+    return merged;
+  };
 
   // Get today's date in YYYY-MM-DD format for min attribute
   const getTodayDate = () => {
@@ -237,7 +265,7 @@ export default function AddCustomer() {
             localAnnual.length > 0 ? localAnnual : DEFAULT_ANNUAL_TREATMENTS
           )
         );
-        setCatalogTreatments(localItems.filter((t) => t.programType === "other"));
+        setCatalogAllItems(mergeCatalogLists([], localItems));
         toast.error("Please log in again to load treatments from server", {
           toastId: ADD_CUSTOMER_ERROR_TOAST_ID,
         });
@@ -285,17 +313,7 @@ export default function AddCustomer() {
         )
       );
 
-      const localOther = localItems.filter((t) => t.programType === "other");
-      const apiCatalog = items.filter((t) => t.programType === "other");
-      const seen = new Set(
-        apiCatalog.map((t) => String(t.treatmentName).trim().toUpperCase())
-      );
-      setCatalogTreatments([
-        ...apiCatalog,
-        ...localOther.filter(
-          (t) => !seen.has(String(t.treatmentName).trim().toUpperCase())
-        ),
-      ]);
+      setCatalogAllItems(mergeCatalogLists(items, localItems));
     } catch (error) {
       console.error("Failed to load treatment catalog:", error);
       const localAnnual = buildAnnualTreatmentsFromCatalog([], localItems);
@@ -304,7 +322,7 @@ export default function AddCustomer() {
           localAnnual.length > 0 ? localAnnual : DEFAULT_ANNUAL_TREATMENTS
         )
       );
-      setCatalogTreatments(localItems.filter((t) => t.programType === "other"));
+      setCatalogAllItems(mergeCatalogLists([], localItems));
       toast.error(
         error.response?.data?.message ||
           "Could not load treatments from server — showing saved defaults",
@@ -538,6 +556,7 @@ export default function AddCustomer() {
           isChemicalSection: true,
           isChemicalMaintenanceEnabled: isChemicalChecked,
           toQuantity: toWholeQuantity,
+          catalogTreatments: otherChemicalCatalog,
         }),
       ];
 
@@ -618,8 +637,8 @@ export default function AddCustomer() {
     const isChemicalSection = rows === chemicalTreatmentRows;
 
     if (field === "treatment" && value) {
-      if (!isChemicalSection && !value.startsWith(MATERIAL_OPTION_PREFIX)) {
-        toast.error("OTHER TREATMENTS me sirf materials select kar sakte hain.");
+      if (!isChemicalSection && !value.startsWith(MATERIAL_OPTION_PREFIX) && !value.startsWith(CATALOG_OPTION_PREFIX)) {
+        toast.error("OTHER TREATMENTS me sirf materials ya Other Treatment catalog select kar sakte hain.");
         return;
       }
       if (isChemicalSection && value.startsWith(MATERIAL_OPTION_PREFIX)) {
@@ -640,7 +659,9 @@ export default function AddCustomer() {
       const updatedRows = [...rows];
       const nextRow = applyOtherTreatmentSelection(updatedRows[index], value, {
         materials,
-        catalogTreatments,
+        catalogTreatments: isChemicalSection
+          ? otherChemicalCatalog
+          : otherTreatmentCatalog,
         chemicalMixes,
         isChemicalSection,
         isChemicalMaintenanceEnabled: isChemicalChecked,
@@ -814,8 +835,8 @@ export default function AddCustomer() {
                       <th className="p-2 border">ANNUAL TREATMENT PROGRAM</th>
                       <th className="p-2 border">QUANTITY</th>
                       <th className="p-2 border">SCHEDULE DATE</th>
-                      <th className="p-2 border">PRICE</th>
                       <th className="p-2 border">COST</th>
+                      <th className="p-2 border">PRICE</th>
                       <th className="p-2 border">ACTION</th>
                     </tr>
                   </thead>
@@ -925,18 +946,18 @@ export default function AddCustomer() {
                           )}
                         </td>
 
-                        {/* Price */}
-                        <td className="border p-2">
-                          <span className="font-medium">
-                            $
-                            {Number(isChemicalChecked ? (t.lowerPrice ?? t.price ?? 0) : (t.price ?? 0)).toFixed(2)}
-                          </span>
-                        </td>
-
                         {/* Cost */}
                         <td className="border p-2">
                           <span className="font-medium">
                             ${Number(t.cost ?? 0).toFixed(2)}
+                          </span>
+                        </td>
+
+                        {/* Price */}
+                        <td className="border p-2">
+                          <span className="font-medium">
+                            $
+                            {Number(t.price ?? 0).toFixed(2)}
                           </span>
                         </td>
 
@@ -998,8 +1019,8 @@ export default function AddCustomer() {
                       <th className="p-2 border">TREATMENT</th>
                       <th className="p-2 border">QUANTITY</th>
                       <th className="p-2 border">SCHEDULE DATE</th>
-                      <th className="p-2 border">PRICE</th>
                       <th className="p-2 border">COST</th>
+                      <th className="p-2 border">PRICE</th>
                       <th className="p-2 border">ACTION</th>
                     </tr>
                   </thead>
@@ -1015,6 +1036,7 @@ export default function AddCustomer() {
                       const dropdownOptions = buildMaterialOtherTreatmentDropdownOptions({
                         materials,
                         chemicalMixes,
+                        catalogTreatments: otherTreatmentCatalog,
                         isKeyTaken: isKeyTakenElsewhere,
                       });
 
@@ -1131,21 +1153,6 @@ export default function AddCustomer() {
                           )}
                         </td>
 
-                        {/* Price */}
-                        <td className="border p-2">
-                          <input
-                            type="number"
-                            value={row.price ?? ""}
-                            min="0"
-                            step="0.01"
-                            onChange={(e) =>
-                              handleRowChange(index, "price", e.target.value)
-                            }
-                            className="w-full border px-2 py-1"
-                            placeholder="0.00"
-                          />
-                        </td>
-
                         {/* Cost */}
                         <td className="border p-2">
                           <input
@@ -1155,6 +1162,21 @@ export default function AddCustomer() {
                             step="0.01"
                             onChange={(e) =>
                               handleRowChange(index, "cost", e.target.value)
+                            }
+                            className="w-full border px-2 py-1"
+                            placeholder="0.00"
+                          />
+                        </td>
+
+                        {/* Price */}
+                        <td className="border p-2">
+                          <input
+                            type="number"
+                            value={row.price ?? ""}
+                            min="0"
+                            step="0.01"
+                            onChange={(e) =>
+                              handleRowChange(index, "price", e.target.value)
                             }
                             className="w-full border px-2 py-1"
                             placeholder="0.00"
@@ -1208,8 +1230,8 @@ export default function AddCustomer() {
                       <th className="p-2 border">TREATMENT</th>
                       <th className="p-2 border">QUANTITY</th>
                       <th className="p-2 border">SCHEDULE DATE</th>
-                      <th className="p-2 border">PRICE</th>
                       <th className="p-2 border">COST</th>
+                      <th className="p-2 border">PRICE</th>
                       <th className="p-2 border">ACTION</th>
                     </tr>
                   </thead>
@@ -1223,7 +1245,7 @@ export default function AddCustomer() {
 
                       const dropdownOptions = buildChemicalOtherTreatmentDropdownOptions({
                         chemicalMixes,
-                        catalogTreatments,
+                        catalogTreatments: otherChemicalCatalog,
                         isChemicalMaintenanceEnabled: isChemicalChecked,
                         isKeyTaken: isKeyTakenElsewhere,
                       });
@@ -1339,11 +1361,11 @@ export default function AddCustomer() {
                           <td className="border p-2">
                             <input
                               type="number"
-                              value={row.price ?? ""}
+                              value={row.cost ?? ""}
                               min="0"
                               step="0.01"
                               onChange={(e) =>
-                                handleChemicalRowChange(index, "price", e.target.value)
+                                handleChemicalRowChange(index, "cost", e.target.value)
                               }
                               className="w-full border px-2 py-1"
                               placeholder="0.00"
@@ -1352,11 +1374,11 @@ export default function AddCustomer() {
                           <td className="border p-2">
                             <input
                               type="number"
-                              value={row.cost ?? ""}
+                              value={row.price ?? ""}
                               min="0"
                               step="0.01"
                               onChange={(e) =>
-                                handleChemicalRowChange(index, "cost", e.target.value)
+                                handleChemicalRowChange(index, "price", e.target.value)
                               }
                               className="w-full border px-2 py-1"
                               placeholder="0.00"

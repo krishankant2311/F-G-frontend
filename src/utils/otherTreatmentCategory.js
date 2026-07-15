@@ -3,6 +3,8 @@ import {
   isOtherChemicalProgramTreatment,
   normalizeTreatmentNameKey,
   augmentChemicalMixesWithProgramTreatments,
+  findCatalogTreatmentByName,
+  formatCatalogTreatmentDisplayName,
 } from "./otherTreatmentDefaults";
 import {
   CATALOG_OPTION_PREFIX,
@@ -254,6 +256,7 @@ export function scheduleItemAppliesLabor(item) {
 export function buildMaterialOtherTreatmentDropdownOptions({
   materials = [],
   chemicalMixes = [],
+  catalogTreatments = [],
   isKeyTaken = () => false,
 }) {
   const mixNames = new Set(
@@ -262,7 +265,7 @@ export function buildMaterialOtherTreatmentDropdownOptions({
       .filter(Boolean)
   );
 
-  return (materials || [])
+  const materialOptions = (materials || [])
     .filter((m) => m?.status === "Active" && m?.name)
     .filter((m) => !mixNames.has(String(m.name).trim().toLowerCase()))
     .map((m) => ({
@@ -270,8 +273,20 @@ export function buildMaterialOtherTreatmentDropdownOptions({
       label: m.name,
       kind: "material",
     }))
-    .filter((m) => !isKeyTaken(m.key))
-    .sort((a, b) => String(a.label).localeCompare(String(b.label)));
+    .filter((m) => !isKeyTaken(m.key));
+
+  const catalogOptions = (catalogTreatments || [])
+    .filter((c) => c?.treatmentName)
+    .map((c) => ({
+      key: `${CATALOG_OPTION_PREFIX}${c._id}`,
+      label: formatCatalogTreatmentDisplayName(c),
+      kind: "catalog",
+    }))
+    .filter((c) => !isKeyTaken(c.key));
+
+  return [...materialOptions, ...catalogOptions].sort((a, b) =>
+    String(a.label).localeCompare(String(b.label))
+  );
 }
 
 export function buildChemicalOtherTreatmentDropdownOptions({
@@ -282,11 +297,21 @@ export function buildChemicalOtherTreatmentDropdownOptions({
 }) {
   const mixesForDropdown = augmentChemicalMixesWithProgramTreatments(
     chemicalMixes,
-    isChemicalMaintenanceEnabled
+    isChemicalMaintenanceEnabled,
+    catalogTreatments
+  );
+
+  const catalogNameKeys = new Set(
+    (catalogTreatments || []).map((c) =>
+      normalizeTreatmentNameKey(c.treatmentName)
+    )
   );
 
   const mixOptions = mixesForDropdown
     .filter((mix) => mix?.mixName && !isKeyTaken(mix.mixName))
+    .filter(
+      (mix) => !catalogNameKeys.has(normalizeTreatmentNameKey(mix.mixName))
+    )
     .map((mix) => ({
       key: mix.mixName,
       label: mix.mixName,
@@ -295,10 +320,9 @@ export function buildChemicalOtherTreatmentDropdownOptions({
 
   const catalogOptions = (catalogTreatments || [])
     .filter((c) => c?.treatmentName)
-    .filter((c) => !isOtherChemicalProgramTreatment(c.treatmentName))
     .map((c) => ({
       key: `${CATALOG_OPTION_PREFIX}${c._id}`,
-      label: c.treatmentName,
+      label: formatCatalogTreatmentDisplayName(c),
       kind: "catalog",
     }))
     .filter((c) => !isKeyTaken(c.key));
@@ -310,7 +334,12 @@ export function buildChemicalOtherTreatmentDropdownOptions({
 
 export function formatOtherTreatmentRowsForApi(
   rows,
-  { isChemicalSection, isChemicalMaintenanceEnabled, toQuantity }
+  {
+    isChemicalSection,
+    isChemicalMaintenanceEnabled,
+    toQuantity,
+    catalogTreatments = [],
+  }
 ) {
   const uniqueRows = rows.filter((row, index, self) => {
     if (row.treatment === "Other") return true;
@@ -393,11 +422,10 @@ export function formatOtherTreatmentRowsForApi(
       }
 
       if (row.catalogData) {
-        const defaultPrice = isChemicalMaintenanceEnabled
-          ? row.catalogData.lowerPrice ?? row.catalogData.price ?? 0
-          : row.catalogData.price ?? 0;
         const pricePerTank =
-          row.price !== "" && row.price != null ? Number(row.price) : defaultPrice;
+          row.price !== "" && row.price != null
+            ? Number(row.price)
+            : Number(row.catalogData.price ?? 0);
         const unitCost =
           row.cost !== "" && row.cost != null
             ? Number(row.cost)
@@ -406,7 +434,7 @@ export function formatOtherTreatmentRowsForApi(
           withOtherTreatmentDates(
             {
               ...baseData,
-              treatment: row.catalogData.treatmentName,
+              treatment: formatCatalogTreatmentDisplayName(row.catalogData) || row.catalogData.treatmentName,
               totalCostPerTank: unitCost,
               totalPricePerTank: pricePerTank,
               treatmentCatalogId: row.catalogData._id,
@@ -418,11 +446,10 @@ export function formatOtherTreatmentRowsForApi(
       }
 
       if (row.mixData) {
-        const defaultPrice = isChemicalMaintenanceEnabled
-          ? row.mixData.totalCostPerTank ?? 0
-          : row.mixData.totalPricePerTank ?? 0;
         const pricePerTank =
-          row.price !== "" && row.price != null ? Number(row.price) : defaultPrice;
+          row.price !== "" && row.price != null
+            ? Number(row.price)
+            : Number(row.mixData.totalPricePerTank ?? 0);
         const unitCost =
           row.cost !== "" && row.cost != null
             ? Number(row.cost)
@@ -451,13 +478,18 @@ export function formatOtherTreatmentRowsForApi(
 
       const programItem = findOtherChemicalProgramTreatment(row.treatment);
       if (programItem) {
-        const defaultPrice = isChemicalMaintenanceEnabled
-          ? programItem.lowerPrice ?? programItem.price ?? 0
-          : programItem.price ?? 0;
+        const catalogMatch = findCatalogTreatmentByName(
+          programItem.name,
+          catalogTreatments
+        );
         const pricePerTank =
-          row.price !== "" && row.price != null ? Number(row.price) : defaultPrice;
+          row.price !== "" && row.price != null
+            ? Number(row.price)
+            : Number(catalogMatch?.price ?? programItem.price ?? 0);
         const unitCost =
-          row.cost !== "" && row.cost != null ? Number(row.cost) : programItem.cost || 0;
+          row.cost !== "" && row.cost != null
+            ? Number(row.cost)
+            : Number(catalogMatch?.cost ?? programItem.cost ?? 0);
         return uniqDates.map((d) =>
           withOtherTreatmentDates(
             {
@@ -488,6 +520,20 @@ export function applyOtherTreatmentSelection(
   };
 
   if (!isChemicalSection) {
+    if (value.startsWith(CATALOG_OPTION_PREFIX)) {
+      const catalogId = value.slice(CATALOG_OPTION_PREFIX.length);
+      const catalogItem = catalogTreatments.find((c) => c._id === catalogId);
+      return {
+        ...row,
+        ...baseReset,
+        treatment: formatCatalogTreatmentDisplayName(catalogItem) || catalogItem?.treatmentName || "",
+        mixData: null,
+        catalogData: catalogItem || null,
+        materialData: null,
+        price: catalogItem?.price ?? "",
+        cost: catalogItem?.cost ?? "",
+      };
+    }
     if (!value.startsWith(MATERIAL_OPTION_PREFIX)) {
       return row;
     }
@@ -515,16 +561,26 @@ export function applyOtherTreatmentSelection(
     return {
       ...row,
       ...baseReset,
-      treatment: catalogItem?.treatmentName || "",
+      treatment: formatCatalogTreatmentDisplayName(catalogItem) || catalogItem?.treatmentName || "",
       mixData: null,
       catalogData: catalogItem || null,
       materialData: null,
-      price: catalogItem
-        ? isChemicalMaintenanceEnabled
-          ? catalogItem.lowerPrice ?? catalogItem.price ?? ""
-          : catalogItem.price ?? ""
-        : "",
+      price: catalogItem?.price ?? "",
       cost: catalogItem?.cost ?? "",
+    };
+  }
+
+  const catalogMatch = findCatalogTreatmentByName(value, catalogTreatments);
+  if (catalogMatch) {
+    return {
+      ...row,
+      ...baseReset,
+      treatment: formatCatalogTreatmentDisplayName(catalogMatch) || catalogMatch.treatmentName || "",
+      mixData: null,
+      catalogData: catalogMatch,
+      materialData: null,
+      price: catalogMatch.price ?? "",
+      cost: catalogMatch.cost ?? "",
     };
   }
 
@@ -537,9 +593,7 @@ export function applyOtherTreatmentSelection(
       mixData: null,
       catalogData: null,
       materialData: null,
-      price: isChemicalMaintenanceEnabled
-        ? programItem.lowerPrice ?? programItem.price ?? ""
-        : programItem.price ?? "",
+      price: programItem.price ?? "",
       cost: programItem.cost ?? "",
     };
   }

@@ -32,7 +32,13 @@ import {
   resolveOtherTreatmentQuantity,
   scheduleItemAppliesLabor,
 } from "../../../../../utils/otherTreatmentCategory";
-import { isOtherChemicalProgramTreatment, normalizeTreatmentNameKey } from "../../../../../utils/otherTreatmentDefaults";
+import {
+  filterTreatmentsByProgramType,
+  isOtherChemicalProgramTreatment,
+  normalizeTreatmentNameKey,
+  PROGRAM_TYPE_OTHER,
+  PROGRAM_TYPE_OTHER_CHEMICAL,
+} from "../../../../../utils/otherTreatmentDefaults";
 import {
   resolveAnnualUnitCost,
   resolveAnnualUnitPrice,
@@ -165,7 +171,7 @@ const CustomerAnnualProgramSchedule = () => {
 
   // chemical mixes + catalog for OTHER CHEMICAL TREATMENTS dropdown; materials for OTHER TREATMENTS
   const [chemicalMixes, setChemicalMixes] = useState([]);
-  const [catalogTreatments, setCatalogTreatments] = useState([]);
+  const [catalogAllItems, setCatalogAllItems] = useState([]);
   const [catalogLookupTreatments, setCatalogLookupTreatments] = useState([]);
   const [materials, setMaterials] = useState([]);
 
@@ -230,17 +236,23 @@ const CustomerAnnualProgramSchedule = () => {
       if (res.data.statusCode === 200) {
         const items = res.data.result?.treatments || [];
         const localCustom = getCustomLocalTreatments();
-        const localOther = localCustom.filter((t) => t.programType === "other");
-        const apiCatalog = items.filter((t) => t.programType === "other");
-        const seen = new Set(
-          apiCatalog.map((t) => String(t.treatmentName).trim().toUpperCase())
-        );
-        setCatalogTreatments([
-          ...apiCatalog,
-          ...localOther.filter(
-            (t) => !seen.has(String(t.treatmentName).trim().toUpperCase())
-          ),
-        ]);
+        const mergeCatalogLists = (apiItems = [], localItems = []) => {
+          const seen = new Set(
+            apiItems.map((t) => String(t.treatmentName || "").trim().toUpperCase())
+          );
+          const merged = [...apiItems];
+          localItems.forEach((item) => {
+            const name = String(item.treatmentName || "").trim();
+            if (!name) return;
+            const key = name.toUpperCase();
+            if (seen.has(key)) return;
+            seen.add(key);
+            merged.push(item);
+          });
+          return merged;
+        };
+
+        setCatalogAllItems(mergeCatalogLists(items, localCustom));
 
         const lookupSeen = new Set(
           items.map((t) => String(t.treatmentName).trim().toUpperCase())
@@ -255,9 +267,7 @@ const CustomerAnnualProgramSchedule = () => {
       }
     } catch (error) {
       console.error("Failed to load treatment catalog:", error);
-      setCatalogTreatments(
-        getCustomLocalTreatments().filter((t) => t.programType === "other")
-      );
+      setCatalogAllItems(getCustomLocalTreatments());
       setCatalogLookupTreatments(getCustomLocalTreatments());
     }
   };
@@ -418,6 +428,15 @@ const CustomerAnnualProgramSchedule = () => {
     ]
   );
 
+  const otherTreatmentCatalog = useMemo(
+    () => filterTreatmentsByProgramType(catalogAllItems, PROGRAM_TYPE_OTHER),
+    [catalogAllItems]
+  );
+  const otherChemicalCatalog = useMemo(
+    () => filterTreatmentsByProgramType(catalogAllItems, PROGRAM_TYPE_OTHER_CHEMICAL),
+    [catalogAllItems]
+  );
+
  
   if (stateLoading) {
     return (
@@ -471,7 +490,7 @@ const CustomerAnnualProgramSchedule = () => {
       { cost: savedCost, price: savedPrice, quantity: qty, treatmentName: at.name },
       scheduleCostContext
     );
-    const effectiveCost = savedCost > 0 ? savedCost : money2(unitCost * qty);
+    const effectiveCost = money2(unitCost * qty);
 
     const ds = Array.isArray(at.scheduleDates) && at.scheduleDates.length > 0
       ? at.scheduleDates
@@ -529,7 +548,7 @@ const CustomerAnnualProgramSchedule = () => {
         { cost: savedCost, price: savedPrice, quantity: qty, treatmentName: at.name },
         scheduleCostContext
       );
-      const effectiveCost = savedCost > 0 ? savedCost : money2(unitCost * qty);
+      const effectiveCost = money2(unitCost * qty);
 
       const ds =
         Array.isArray(at.scheduleDates) && at.scheduleDates.length > 0
@@ -749,8 +768,8 @@ const CustomerAnnualProgramSchedule = () => {
     const updated = [...rows];
 
     if (field === "treatment" && value) {
-      if (!isChemicalSection && !value.startsWith(MATERIAL_OPTION_PREFIX)) {
-        toast.error("OTHER TREATMENTS me sirf materials select kar sakte hain.");
+      if (!isChemicalSection && !value.startsWith(MATERIAL_OPTION_PREFIX) && !value.startsWith(CATALOG_OPTION_PREFIX)) {
+        toast.error("OTHER TREATMENTS me sirf materials ya Other Treatment catalog select kar sakte hain.");
         return;
       }
       if (isChemicalSection && value.startsWith(MATERIAL_OPTION_PREFIX)) {
@@ -768,7 +787,9 @@ const CustomerAnnualProgramSchedule = () => {
 
       const nextRow = applyOtherTreatmentSelection(updated[index], value, {
         materials,
-        catalogTreatments,
+        catalogTreatments: isChemicalSection
+          ? otherChemicalCatalog
+          : otherTreatmentCatalog,
         chemicalMixes,
         isChemicalSection,
         isChemicalMaintenanceEnabled: maintenanceEnabledNormalized,
@@ -1414,6 +1435,7 @@ const CustomerAnnualProgramSchedule = () => {
           isChemicalSection: true,
           isChemicalMaintenanceEnabled: maintenanceEnabledNormalized,
           toQuantity: wholeQuantity,
+          catalogTreatments: otherChemicalCatalog,
         }),
       ];
 
@@ -1922,7 +1944,7 @@ const CustomerAnnualProgramSchedule = () => {
                   }
                 } else if (key.startsWith(CATALOG_OPTION_PREFIX)) {
                   const catalogId = key.slice(CATALOG_OPTION_PREFIX.length);
-                  const catalogItem = catalogTreatments.find((c) => c._id === catalogId);
+                  const catalogItem = catalogAllItems.find((c) => c._id === catalogId);
                   if (
                     catalogItem &&
                     scheduledTreatmentNames.includes(catalogItem.treatmentName)
@@ -1940,6 +1962,7 @@ const CustomerAnnualProgramSchedule = () => {
               const dropdownOptions = buildMaterialOtherTreatmentDropdownOptions({
                 materials,
                 chemicalMixes,
+                catalogTreatments: otherTreatmentCatalog,
                 isKeyTaken: isKeyTakenElsewhere,
               });
 
@@ -2225,7 +2248,7 @@ const CustomerAnnualProgramSchedule = () => {
                 chemicalMixes: chemicalMixes.filter(
                   (mix) => !visibleScheduledTreatments.some((st) => st.treatment === mix.mixName)
                 ),
-                catalogTreatments,
+                catalogTreatments: otherChemicalCatalog,
                 isChemicalMaintenanceEnabled: maintenanceEnabledNormalized,
                 isKeyTaken: isKeyTakenElsewhere,
               });

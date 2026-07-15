@@ -80,29 +80,51 @@ export function findOtherChemicalProgramTreatment(name) {
   );
 }
 
+export function findCatalogTreatmentByName(name, catalogTreatments = []) {
+  const key = normalizeTreatmentNameKey(name);
+  if (!key) return null;
+  return (
+    (catalogTreatments || []).find(
+      (item) => normalizeTreatmentNameKey(item?.treatmentName) === key
+    ) || null
+  );
+}
+
+/** Display label: append catalog quantity/unit when set (e.g. "OSMOCOTE (PER 40 lbs bags)"). */
+export function formatCatalogTreatmentDisplayName(item = {}) {
+  const baseName = String(item.treatmentName ?? item.name ?? "").trim();
+  if (!baseName) return "";
+
+  const quantity = String(item.quantity ?? "").trim();
+  const unit = String(item.unit ?? "").trim();
+  if (!quantity && !unit) return baseName;
+
+  return `${baseName} (PER ${[quantity, unit].filter(Boolean).join(" ")})`;
+}
+
 /** Show bag/bottle program treatments inside the same list as chemical mixes. */
 export function augmentChemicalMixesWithProgramTreatments(
   chemicalMixes = [],
-  isChemicalMaintenanceEnabled = false
+  _isChemicalMaintenanceEnabled = false,
+  catalogTreatments = []
 ) {
-  const maintenance =
-    isChemicalMaintenanceEnabled === true ||
-    isChemicalMaintenanceEnabled === "true" ||
-    isChemicalMaintenanceEnabled === "Yes" ||
-    isChemicalMaintenanceEnabled === "yes" ||
-    isChemicalMaintenanceEnabled === 1 ||
-    isChemicalMaintenanceEnabled === "1";
-
   const existingNames = new Set(
     (chemicalMixes || []).map((mix) => normalizeTreatmentNameKey(mix?.mixName))
   );
+  const catalogNames = new Set(
+    (catalogTreatments || []).map((c) =>
+      normalizeTreatmentNameKey(c?.treatmentName)
+    )
+  );
 
   const programAsMixes = OTHER_CHEMICAL_PROGRAM_TREATMENTS.filter(
-    (t) => !existingNames.has(normalizeTreatmentNameKey(t.name))
+    (t) =>
+      !existingNames.has(normalizeTreatmentNameKey(t.name)) &&
+      !catalogNames.has(normalizeTreatmentNameKey(t.name))
   ).map((t) => ({
     _id: `program-treatment-${normalizeTreatmentNameKey(t.name)}`,
     mixName: t.name,
-    totalPricePerTank: maintenance ? t.lowerPrice ?? t.price ?? 0 : t.price ?? 0,
+    totalPricePerTank: t.price ?? 0,
     totalCostPerTank: t.cost ?? 0,
     chemicals: [],
     _isProgramTreatment: true,
@@ -116,12 +138,16 @@ export function filterAnnualProgramTreatments(rows = []) {
 }
 
 export function mapApiTreatmentToAnnualRow(item) {
+  const treatmentName = item.treatmentName || item.name || "";
   return {
-    name: item.treatmentName || item.name || "",
+    name: formatCatalogTreatmentDisplayName(item),
+    treatmentName,
     qty: "",
     price: Number(item.price) || 0,
     lowerPrice: Number(item.lowerPrice) || 0,
     cost: Number(item.cost) || 0,
+    quantity: String(item.quantity ?? "").trim(),
+    unit: String(item.unit ?? "").trim(),
     sortOrder: Number(item.sortOrder) || 0,
     _id: item._id,
   };
@@ -172,8 +198,28 @@ export function buildAnnualTreatmentsFromCatalog(apiItems = [], localItems = [])
   return rows;
 }
 
+export const PROGRAM_TYPE_ANNUAL = "annual_program";
+export const PROGRAM_TYPE_OTHER = "other";
+export const PROGRAM_TYPE_OTHER_CHEMICAL = "other_chemical";
+
+export function normalizeProgramType(value) {
+  if (value === PROGRAM_TYPE_ANNUAL) return PROGRAM_TYPE_ANNUAL;
+  if (value === PROGRAM_TYPE_OTHER_CHEMICAL) return PROGRAM_TYPE_OTHER_CHEMICAL;
+  return PROGRAM_TYPE_OTHER;
+}
+
+export function filterTreatmentsByProgramType(items = [], programType) {
+  const target = normalizeProgramType(programType);
+  return (items || []).filter(
+    (item) => normalizeProgramType(item?.programType) === target
+  );
+}
+
 export function formatProgramTypeLabel(programType) {
-  return programType === "annual_program" ? "Annual Program" : "Other";
+  const normalized = normalizeProgramType(programType);
+  if (normalized === PROGRAM_TYPE_ANNUAL) return "Annual Program";
+  if (normalized === PROGRAM_TYPE_OTHER_CHEMICAL) return "Other Chemical Treatment";
+  return "Other Treatment";
 }
 
 /** Table rows when API is empty or unavailable — same 7 landscaping defaults. */

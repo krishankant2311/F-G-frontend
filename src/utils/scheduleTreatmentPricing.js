@@ -1,5 +1,6 @@
 import {
   augmentChemicalMixesWithProgramTreatments,
+  DEFAULT_ANNUAL_TREATMENTS,
   findOtherChemicalProgramTreatment,
   normalizeTreatmentNameKey,
 } from "./otherTreatmentDefaults";
@@ -60,31 +61,63 @@ function findMaterialByTreatmentName(name, materials = []) {
   );
 }
 
+function findAnnualProgramDefaultTreatment(name) {
+  const key = normalizeTreatmentNameKey(name);
+  if (!key) return null;
+  return (
+    DEFAULT_ANNUAL_TREATMENTS.find(
+      (t) => normalizeTreatmentNameKey(t.name) === key
+    ) || null
+  );
+}
+
 /** Same unit-cost sources used when picking from Other / Other Chemical tables. */
 export function resolveCatalogUnitCostByName(treatmentName, context) {
   if (!treatmentName || !context) return null;
 
+  const key = normalizeTreatmentNameKey(treatmentName);
+  if (!key) return null;
+
+  const catalogItems = context.catalogTreatments || [];
+
   const augmentedMixes = augmentChemicalMixesWithProgramTreatments(
     context.chemicalMixes || [],
-    context.isChemicalMaintenanceEnabled
+    context.isChemicalMaintenanceEnabled,
+    catalogItems
   );
+
+  const catalogExact = catalogItems.find(
+    (item) => normalizeTreatmentNameKey(item?.treatmentName) === key
+  );
+  if (catalogExact && Number(catalogExact.cost) > 0) {
+    return money2(catalogExact.cost);
+  }
+
+  const annualDefault = findAnnualProgramDefaultTreatment(treatmentName);
+  if (annualDefault && Number(annualDefault.cost) > 0) {
+    return money2(annualDefault.cost);
+  }
+
+  const mixExact = augmentedMixes.find(
+    (mix) => normalizeTreatmentNameKey(mix?.mixName) === key
+  );
+  if (mixExact && Number(mixExact.totalCostPerTank) > 0) {
+    return money2(mixExact.totalCostPerTank);
+  }
+
+  const catalogFuzzy = findCatalogByTreatmentName(treatmentName, catalogItems);
+  if (catalogFuzzy && Number(catalogFuzzy.cost) > 0) {
+    return money2(catalogFuzzy.cost);
+  }
 
   const programItem = findOtherChemicalProgramTreatment(treatmentName);
   if (programItem && Number(programItem.cost) > 0) {
     return money2(programItem.cost);
   }
 
-  const mix = findMixByTreatmentName(treatmentName, augmentedMixes);
-  if (mix && Number(mix.totalCostPerTank) > 0) {
-    return money2(mix.totalCostPerTank);
-  }
-
-  const catalogItem = findCatalogByTreatmentName(
-    treatmentName,
-    context.catalogTreatments || []
-  );
-  if (catalogItem && Number(catalogItem.cost) > 0) {
-    return money2(catalogItem.cost);
+  const mixFuzzy = findMixByTreatmentName(treatmentName, augmentedMixes);
+  if (mixFuzzy && Number(mixFuzzy.totalCostPerTank) > 0) {
+    return money2(mixFuzzy.totalCostPerTank);
   }
 
   const material = findMaterialByTreatmentName(
@@ -116,10 +149,18 @@ export function resolveAnnualUnitCost(
 ) {
   const qty = Number(quantity) || 0;
   const totalCost = Number(cost) || 0;
-  if (qty > 0 && totalCost > 0) return money2(totalCost / qty);
+  const totalPrice = Number(price) || 0;
 
   const catalogUnitCost = resolveCatalogUnitCostByName(treatmentName, context);
-  if (catalogUnitCost != null && catalogUnitCost > 0) return catalogUnitCost;
+  if (catalogUnitCost != null && catalogUnitCost > 0) {
+    return catalogUnitCost;
+  }
+
+  if (qty > 0 && totalCost > 0) return money2(totalCost / qty);
+
+  if (qty > 0 && totalPrice > 0) {
+    return money2(totalPrice / 2 / qty);
+  }
 
   return defaultUnitCost;
 }
@@ -173,11 +214,15 @@ export function resolveOtherTreatmentCostPerTank(
 export function resolveScheduleRowUnitCost(item, context = null) {
   if (!item) return 0;
 
-  const baseQty = Number(item.quantity) || 0;
-  const baseCost = Number(item.cost) || 0;
-  if (baseQty > 0 && baseCost > 0) return money2(baseCost / baseQty);
-
   if (item.type === "other" || item.type === "other-new") {
+    if (item.unitCost != null && Number(item.unitCost) > 0) {
+      return money2(Number(item.unitCost));
+    }
+
+    const baseQty = Number(item.quantity) || 0;
+    const baseCost = Number(item.cost) || 0;
+    if (baseQty > 0 && baseCost > 0) return money2(baseCost / baseQty);
+
     return resolveOtherTreatmentCostPerTank(
       {
         totalCostPerTank: item.unitCost,

@@ -8,6 +8,7 @@ import EditOtherTreatment from "./components/EditOtherTreatment";
 import DeleteOtherTreatment from "./components/DeleteOtherTreatment";
 import {
   formatProgramTypeLabel,
+  formatCatalogTreatmentDisplayName,
   mergeDefaultAndCustomTreatments,
 } from "../../../utils/otherTreatmentDefaults";
 import {
@@ -377,10 +378,6 @@ export default function OtherTreatmentsTable() {
                 <th onClick={() => handleSort("cost")}>
                   Cost <SortIcon column="cost" sortBy={sortBy} sortOrder={sortOrder} />
                 </th>
-                <th onClick={() => handleSort("lowerPrice")}>
-                  Lower Price{" "}
-                  <SortIcon column="lowerPrice" sortBy={sortBy} sortOrder={sortOrder} />
-                </th>
                 <th onClick={() => handleSort("price")}>
                   Price <SortIcon column="price" sortBy={sortBy} sortOrder={sortOrder} />
                 </th>
@@ -393,10 +390,11 @@ export default function OtherTreatmentsTable() {
                   data.map((item) => (
                     <tr key={item._id}>
                       <td>{item.serialNo}</td>
-                      <td className="text-left">{item.treatmentName}</td>
+                      <td className="text-left">
+                        {formatCatalogTreatmentDisplayName(item)}
+                      </td>
                       <td>{formatProgramTypeLabel(item.programType)}</td>
                       <td>{formatMoney(item.cost)}</td>
-                      <td>{formatMoney(item.lowerPrice)}</td>
                       <td>{formatMoney(item.price)}</td>
                       <td className="flex justify-center gap-4">
                         <button
@@ -418,14 +416,14 @@ export default function OtherTreatmentsTable() {
                   ))
                 ) : (
                   <tr>
-                    <td className="text-center" colSpan={7}>
+                    <td className="text-center" colSpan={6}>
                       No Data Available
                     </td>
                   </tr>
                 )
               ) : (
                 <tr>
-                  <td className="text-center" colSpan={7}>
+                  <td className="text-center" colSpan={6}>
                     Loading ...
                   </td>
                 </tr>
@@ -437,7 +435,6 @@ export default function OtherTreatmentsTable() {
                 <th className="text-left">Treatment Name</th>
                 <th>Program</th>
                 <th>Cost</th>
-                <th>Lower Price</th>
                 <th>Price</th>
                 <th>Actions</th>
               </tr>
