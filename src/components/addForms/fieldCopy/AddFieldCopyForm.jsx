@@ -13,6 +13,7 @@ import {
   applyReferenceVendorToForm,
   ensureFgCostFromPrice,
   normalizeFgEditableUnitValue,
+  normalizeLaborLumpSumEditableAmount,
   recalcFgFieldCopyLineTotals,
   syncFgCostPriceOnUserEdit,
   getMaterialNameInputValue,
@@ -257,6 +258,11 @@ export default function AddFieldCopyForm() {
           value === "" ? "" : parseFloat(value) || 0;
       } else if (name === "cost" && updatedForm.source === "F&G") {
         updatedForm.cost = normalizeFgEditableUnitValue(value);
+      } else if (
+        name === "cost" &&
+        (updatedForm.source === "Labor" || updatedForm.source === "Lump Sum")
+      ) {
+        updatedForm.cost = normalizeLaborLumpSumEditableAmount(value);
       } else if (name === "cost") {
         updatedForm.cost = parseFloat(value) || 0;
       }
@@ -290,12 +296,7 @@ export default function AddFieldCopyForm() {
       updatedForm.source === "Labor" || updatedForm.source === "Lump Sum";
 
     if (name === "totalPrice" && isLaborOrLumpSum) {
-      if (value === "") {
-        updatedForm.totalPrice = "";
-      } else {
-        const parsed = parseFloat(value);
-        updatedForm.totalPrice = Number.isFinite(parsed) ? parsed : "";
-      }
+      updatedForm.totalPrice = normalizeLaborLumpSumEditableAmount(value);
     }
 
     // Auto-calc total price from cost + markup unless user is editing total price directly
@@ -1789,17 +1790,14 @@ export default function AddFieldCopyForm() {
                           Total Price *
                         </label>
                         <input
-                          type="number"
+                          type="text"
+                          inputMode="decimal"
                           className="border-b border-[grey] outline-none"
                           id={`totalPrice-${index}`}
                           name="totalPrice"
                           placeholder="Total price goes here..."
                           value={formData.totalPrice}
-                          max={10000000}
-                          step="any"
-                          // readOnly
                           onChange={(e) => handleInputChange(e, index)}
-                          min={0}
                           required
                         />
                       </div>

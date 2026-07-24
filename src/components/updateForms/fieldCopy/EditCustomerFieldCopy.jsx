@@ -10,6 +10,7 @@ import {
   applyReferenceVendorToForm,
   ensureFgCostFromPrice,
   normalizeFgEditableUnitValue,
+  normalizeLaborLumpSumEditableAmount,
   recalcFgFieldCopyLineTotals,
   syncFgCostPriceOnUserEdit,
   getMaterialNameInputValue,
@@ -698,6 +699,12 @@ export default function EditCustomerFieldCopy() {
     }
     if (updatedForm.source === "F&G" && name === "price") {
       updatedForm.price = normalizeFgEditableUnitValue(value);
+    }
+    if (
+      (updatedForm.source === "Labor" || updatedForm.source === "Lump Sum") &&
+      (name === "cost" || name === "totalPrice")
+    ) {
+      updatedForm[name] = normalizeLaborLumpSumEditableAmount(value);
     }
 
     // Lump Sum: cost + markup → totalPrice; edit totalPrice → markup adjusts
@@ -2036,18 +2043,15 @@ export default function EditCustomerFieldCopy() {
                             Total Price *
                           </label>
                           <input
-                            type="number"
+                            type="text"
+                            inputMode="decimal"
                             className="border-b border-[grey] outline-none"
                             id={`totalPrice-${index}`}
                             name="totalPrice"
                             placeholder="Enter total price"
                             value={formData.totalPrice}
-                            max={10000000}
-                            step="any"
                             readOnly={formData.source === "Labor"}
                             onChange={(e) => handleInputChange(e, index)}
-                            min={0}
-                          // required
                           />
                         </div>
                       )}

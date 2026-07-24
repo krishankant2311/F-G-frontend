@@ -278,6 +278,24 @@ export function otherFieldCopyCostDisplayValue(cost) {
   return cost;
 }
 
+/** Labor / Lump Sum — allow decimal typing in cost & total price (e.g. 1.25, 1.). */
+export function normalizeLaborLumpSumEditableAmount(raw) {
+  if (raw === "" || raw === null || raw === undefined) return "";
+  const s = String(raw).trim();
+  if (s === "" || s === ".") return s;
+  if (/^\d*\.?\d*$/.test(s)) return s;
+  let out = "";
+  let sawDot = false;
+  for (const ch of s) {
+    if (ch >= "0" && ch <= "9") out += ch;
+    else if (ch === "." && !sawDot) {
+      out += ".";
+      sawDot = true;
+    }
+  }
+  return out;
+}
+
 /** Shown in Description / material name fields (no vendor suffix while typing). */
 export function getMaterialNameInputValue(form) {
   if (!form) return "";
