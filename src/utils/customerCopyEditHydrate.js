@@ -14,6 +14,55 @@ export function hydrateLaborDataFromCustomerCopy(laborRows = []) {
   }));
 }
 
+/**
+ * Lump Sum generate/edit: restore cost + markup when office/customer copy
+ * only has totalPrice (or markup stored as schema default 0).
+ */
+export function recoverLumpSumCostAndMarkup(form) {
+  if (
+    !form ||
+    (form.source !== "Lump Sum" &&
+      !String(form.source || "").includes("Lump Sum"))
+  ) {
+    return form;
+  }
+
+  const row = { ...form };
+  let cost = parseFloat(row.cost);
+  if (!Number.isFinite(cost) || cost < 0) cost = 0;
+  let totalPrice = parseFloat(row.totalPrice);
+  if (!Number.isFinite(totalPrice) || totalPrice < 0) totalPrice = 0;
+  // Schema default markup is 0 — treat 0 as missing when recovering from totalPrice.
+  let markupPct = parseFloat(row.markUp ?? row.markup);
+  if (!Number.isFinite(markupPct) || markupPct <= 0) markupPct = NaN;
+
+  if (!Number.isFinite(markupPct) && cost > 0 && totalPrice > 0) {
+    markupPct = Math.round(((totalPrice - cost) / cost) * 10000) / 100;
+  }
+  if (!(cost > 0) && totalPrice > 0 && Number.isFinite(markupPct) && markupPct > 0) {
+    cost = Math.round((totalPrice / (1 + markupPct / 100)) * 100) / 100;
+  }
+  // Common generate case: only total kept → assume 100% markup.
+  if (!(cost > 0) && totalPrice > 0 && !(markupPct > 0)) {
+    markupPct = 100;
+    cost = Math.round((totalPrice / 2) * 100) / 100;
+  }
+
+  if (Number.isFinite(markupPct) && markupPct > 0) {
+    row.markup = markupPct;
+    row.markUp = markupPct;
+  } else {
+    const synced = row.markUp ?? row.markup;
+    row.markup = synced;
+    row.markUp = synced;
+  }
+  if (cost > 0) {
+    row.cost = cost;
+    row.totalCost = cost;
+  }
+  return row;
+}
+
 /** Flat customerCopiesData lines → editable form rows (Generate Customer Copy shape). */
 export function hydrateFormsFromCustomerCopyData(copyLines = []) {
   return (copyLines || []).map((form) => {
@@ -53,6 +102,18 @@ export function hydrateFormsFromCustomerCopyData(copyLines = []) {
       return recalcLaborGenerateCustomerLine(row);
     }
 
+    if (
+      form.source === "Lump Sum" ||
+      String(form.source || "").includes("Lump Sum")
+    ) {
+      return recoverLumpSumCostAndMarkup(row);
+    }
+
+    const syncedMarkup = row.markUp ?? row.markup;
+    if (syncedMarkup !== undefined && syncedMarkup !== null && syncedMarkup !== "") {
+      row.markup = syncedMarkup;
+      row.markUp = syncedMarkup;
+    }
     return row;
   });
 }

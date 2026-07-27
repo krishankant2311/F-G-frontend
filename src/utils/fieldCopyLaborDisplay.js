@@ -1109,12 +1109,17 @@ export function mergeCustomerCopyInvoiceSummaryRows(rows) {
 
     const jobType = resolveCustomerCopyInvoiceLaborJobType(row);
     const matchesStd = customerCopyInvoiceDescriptionMatchesLaborType(row);
+    const taxFlag = isCustomerCopyTaxableFlag(
+      row?.isLaborTaxable ?? row?.isTaxable
+    );
     const normalized = matchesStd
       ? {
           ...row,
           dataType: "Labor",
           jobType: jobType || row.jobType,
           reference: "",
+          isLaborTaxable: taxFlag,
+          isTaxable: taxFlag,
         }
       : {
           ...row,

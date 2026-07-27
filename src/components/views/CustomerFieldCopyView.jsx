@@ -598,9 +598,17 @@ Approved by: __________________  Date: ____________________`,
       ? lookupLaborMapValue(laborManHoursByJobType, itemJt)
       : 0;
 
+    const isLumpSum = String(item?.source || "") === "Lump Sum";
+
     let qty = 0;
     let qtyDisplay = "";
-    if (qtyText) {
+    if (isLumpSum) {
+      const qtyFromItem = Number(item?.quantity);
+      if (Number.isFinite(qtyFromItem) && qtyFromItem > 0) {
+        qty = qtyFromItem;
+        qtyDisplay = formatQtyCell(qtyFromItem);
+      }
+    } else if (qtyText) {
       qtyDisplay = qtyText;
       qty = Number(qtyText) || 0;
     } else if (
@@ -636,6 +644,10 @@ Approved by: __________________  Date: ____________________`,
   /** Customer Copy — hide quantity for Source=Labor field-copy lines only. */
   const shouldHideCustomerCopySourceLaborQuantity = (item) =>
     String(item?.source || "").toLowerCase() === "labor";
+
+  /** Customer Copy — Lump Sum has no qty on generate form; never show a forced 1. */
+  const shouldHideCustomerCopyLumpSumQuantity = (item) =>
+    String(item?.source || "") === "Lump Sum";
 
   /** Materials & Other — merge labor rows when display description is exactly the same. */
   const customerCopyMergedTableRows = useMemo(() => {
@@ -833,6 +845,7 @@ Approved by: __________________  Date: ____________________`,
           const item = row.item;
           const d = getPdfItemDisplayFields(item);
           const hideLaborQty = shouldHideCustomerCopySourceLaborQuantity(item);
+          const hideLumpSumQty = shouldHideCustomerCopyLumpSumQuantity(item);
           const hidePdfLaborFields =
             isPdf && String(item?.source || "").toLowerCase() === "labor";
           return (
@@ -855,6 +868,7 @@ Approved by: __________________  Date: ____________________`,
               >
                 {!hidePdfLaborFields &&
                   !hideLaborQty &&
+                  !hideLumpSumQty &&
                   (d.qtyDisplay || (d.qty > 0 ? formatQtyCell(d.qty) : ""))}
               </td>
               {!isPdf && (
@@ -919,6 +933,15 @@ Approved by: __________________  Date: ____________________`,
                   <>{sourceLaborLabel.toUpperCase()}</>
                 ) : item.source === "Labor" ? (
                   <>{item.jobType?.toUpperCase()} LABOR</>
+                ) : item.source === "Lump Sum" && item.reference ? (
+                  <>
+                    {materialNameBaseForEdit(
+                      String(item.reference),
+                      item.vendorName
+                    )
+                      .trim()
+                      .toUpperCase() || String(item.reference).toUpperCase()}
+                  </>
                 ) : item.jobType?.toLowerCase() === "equipment fees" ? (
                   "EQUIPMENT LUMP SUM"
                 ) : (
@@ -969,7 +992,7 @@ Approved by: __________________  Date: ____________________`,
               {compact && (
                 <b>
                   {formData?.customerType === "Normal"
-                    ? item.isLaborTaxable
+                    ? item.isLaborTaxable ?? item.isTaxable
                       ? "RT"
                       : "RNT"
                     : formData.customerType === "Commercial"
@@ -1018,18 +1041,28 @@ Approved by: __________________  Date: ____________________`,
     const categorizedData = materialData.reduce((result, item) => {
       const category = item.source === "Labor" ? "Labor" : "F&G/Other/LumpSum";
       const reference = String(item?.reference || "").trim();
+      const isLumpSum = String(item?.source || "") === "Lump Sum";
+      // Invoice Summary: same Lump Sum description + same taxable → one line (sum totals); no vendor in label/key.
+      const lumpSumBaseRef = isLumpSum
+        ? materialNameBaseForEdit(reference, item.vendorName).trim() ||
+          materialNameBaseForEdit(reference, "").trim() ||
+          reference
+        : "";
       const key =
         item.source === "Labor" && reference
           ? `${category}_${reference}_${item.jobType}_${item.isTaxable}`
-          : `${category}_${item.jobType}_${item.isTaxable}`;
+          : isLumpSum
+            ? `${category}_LUMP_${lumpSumBaseRef.toUpperCase()}_${!!item.isTaxable}`
+            : `${category}_${item.jobType}_${item.isTaxable}`;
 
       if (!result[key]) {
         result[key] = {
           category,
           jobType: item.jobType,
-          reference,
+          reference: isLumpSum ? lumpSumBaseRef : reference,
           totalPrice: 0,
           isTaxable: item.isTaxable,
+          isLaborTaxable: item.isLaborTaxable,
           source: item.source,
           dataType: item.dataType,
 
@@ -1039,16 +1072,23 @@ Approved by: __________________  Date: ____________________`,
         };
       }
 
-      const qty = item.quantity || 1;
+      const qty =
+        isLumpSum
+          ? Number(item.quantity) > 0
+            ? Number(item.quantity)
+            : 0
+          : item.quantity || 1;
 
       result[key].totalPrice += item.totalPrice || 0;
       result[key].quantity += qty;
-      if (!result[key].reference && reference) {
+      if (item.isTaxable) result[key].isTaxable = true;
+      if (item.isLaborTaxable) result[key].isLaborTaxable = true;
+      if (!isLumpSum && !result[key].reference && reference) {
         result[key].reference = reference;
       }
 
       if (item.cost) {
-        result[key].cost += Number(item.cost) * qty;
+        result[key].cost += Number(item.cost) * (qty > 0 ? qty : 1);
       }
 
       if (item.markUp || item.markup) {
@@ -1107,8 +1147,15 @@ Approved by: __________________  Date: ____________________`,
           : Number(row?.totalPrice) || 0;
       const jobType = jobTypeForCustomerCopyTableRow(row);
       const isSourceLabor = String(row?.source || "") === "Labor";
+      const lineTaxable =
+        row?.isTaxable === true ||
+        row?.isTaxable === "true" ||
+        String(row?.isTaxable || "")
+          .trim()
+          .toLowerCase() === "yes";
       const resolvedLaborTax = isSourceLabor
-        ? resolveCustomerCopyCrewLaborTaxable(
+        ? lineTaxable ||
+          resolveCustomerCopyCrewLaborTaxable(
             {
               jobType,
               isTaxable: row?.isTaxable,
@@ -1118,7 +1165,7 @@ Approved by: __________________  Date: ____________________`,
             formData?.jobType,
             laborTaxLookup
           )
-        : !!row?.isTaxable;
+        : lineTaxable;
       return {
         jobType,
         reference: row?.reference,
@@ -1226,7 +1273,7 @@ Approved by: __________________  Date: ____________________`,
           if (!item) return acc;
           if (item.dataType === "Material") {
             if (!item.isTaxable) return acc;
-          } else if (!item.isLaborTaxable) {
+          } else if (!(item.isLaborTaxable ?? item.isTaxable)) {
             return acc;
           }
           return acc + Number(item.totalPrice || 0);
@@ -1424,6 +1471,7 @@ Approved by: __________________  Date: ____________________`,
         const qty = item.quantity || 1;
         summary[key].quantity += qty;
         summary[key].totalPrice += item.totalPrice || 0;
+        summary[key].isTaxable = summary[key].isTaxable || item.isTaxable;
         if (item.cost) {
           summary[key].cost += Number(item.cost) * qty;
         }
@@ -1443,7 +1491,13 @@ Approved by: __________________  Date: ____________________`,
       ).trim();
       const materialKey = baseMaterialName.toUpperCase();
       if (!materialKey) return;
-      const key = `${String(item.source || "").trim()}-${materialKey}`;
+
+      const isLumpSum = String(item.source || "") === "Lump Sum";
+      const vendorName = String(item.vendorName || item.vendor || "").trim();
+      // Lump Sum: keep separate lines (different vendors / totals) — do not merge by name only.
+      const key = isLumpSum
+        ? `${String(item.source || "").trim()}-${materialKey}-${vendorName.toUpperCase()}-${num(item.totalPrice)}-${num(item.cost)}`
+        : `${String(item.source || "").trim()}-${materialKey}`;
 
       const qty = num(item.quantity);
       const unitPrice = num(item.price);
@@ -1457,7 +1511,11 @@ Approved by: __________________  Date: ____________________`,
         summary[key] = {
           source: item.source,
           isTaxable: item.isTaxable,
-          reference: baseMaterialName,
+          reference: isLumpSum
+            ? String(item.reference || baseMaterialName).trim() ||
+              baseMaterialName
+            : baseMaterialName,
+          vendorName,
           size: item.measure,
           quantity: 0,
           price: 0,
@@ -1497,12 +1555,17 @@ Approved by: __________________  Date: ____________________`,
       if (!row.size && item.measure) {
         row.size = item.measure;
       }
+      if (isLumpSum && vendorName && !row.vendorName) {
+        row.vendorName = vendorName;
+      }
     });
 
     const finalizeMaterialSummaryRow = (row) => {
+      const isLumpSum = String(row.source || "") === "Lump Sum";
       const markupPct = parseFloat(row.markup ?? row.markUp) || 0;
       let qty = num(row.quantity);
-      const qtySafe = qty > 0 ? qty : 1;
+      // Lump Sum: never invent quantity 1 (generate form has no qty field).
+      const qtySafe = qty > 0 ? qty : isLumpSum ? 0 : 1;
       const unitCost = num(row.cost);
       let unitPrice = num(row.price);
       let totalPrice = num(row.totalPrice);
@@ -1518,18 +1581,26 @@ Approved by: __________________  Date: ____________________`,
 
       if (!(totalPrice > 0)) {
         if (unitPrice > 0) {
-          totalPrice = Math.round(unitPrice * qtySafe * 100) / 100;
+          totalPrice =
+            Math.round(unitPrice * (qtySafe > 0 ? qtySafe : 1) * 100) / 100;
         } else if (unitCost > 0 && markupPct > 0) {
           totalPrice =
             Math.round(
-              (unitCost + (unitCost * markupPct) / 100) * qtySafe * 100
+              (unitCost + (unitCost * markupPct) / 100) *
+                (qtySafe > 0 ? qtySafe : 1) *
+                100
             ) / 100;
         }
       }
 
+      // Lump Sum: PRICE column = line total (not a unit × forced qty).
+      if (isLumpSum && totalPrice > 0) {
+        unitPrice = totalPrice;
+      }
+
       return {
         ...row,
-        quantity: qty > 0 ? qty : qtySafe,
+        quantity: qty > 0 ? qty : isLumpSum ? 0 : qtySafe,
         cost: unitCost,
         price: unitPrice,
         totalPrice,

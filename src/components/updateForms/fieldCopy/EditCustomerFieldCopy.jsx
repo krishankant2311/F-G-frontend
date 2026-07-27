@@ -29,6 +29,7 @@ import CustomerSalesOrderPreviewModal from "./CustomerSalesOrderPreviewModal";
 import {
   hydrateFormsFromCustomerCopyData,
   hydrateLaborDataFromCustomerCopy,
+  recoverLumpSumCostAndMarkup,
 } from "../../../utils/customerCopyEditHydrate";
 export default function EditCustomerFieldCopy() {
   const [formData, setFormData] = useState({
@@ -151,8 +152,7 @@ export default function EditCustomerFieldCopy() {
           );
           const cost = parseFloat(form.cost) || 0;
           const price = parseFloat(form.price) || 0;
-          const totalPrice = parseFloat(form.totalPrice) || 0;
-          // Autofill markup - F&G/Other: cost & price se | Lump Sum/Labor: cost & totalPrice se
+          // Autofill markup - F&G/Other: cost & price se
           if (form.source === "F&G") {
             Object.assign(form, ensureFgCostFromPrice(form));
             const fgCost = parseFloat(form.cost) || 0;
@@ -168,16 +168,18 @@ export default function EditCustomerFieldCopy() {
               form.markup = Math.round(autoMarkup * 100) / 100;
               form.markUp = form.markup;
             }
-          } else if (form.source === "Lump Sum" && cost > 0 && totalPrice > 0) {
-            const autoMarkup = ((totalPrice - cost) / cost) * 100;
-            form.markup = Math.round(autoMarkup * 100) / 100;
-            form.markUp = form.markup;
           }
           if (form.source === "Other") {
             return hydrateOtherFieldCopyFromApi(form);
           }
           if (form.source === "Labor") {
             return recalcLaborGenerateCustomerLine(form);
+          }
+          if (
+            form.source === "Lump Sum" ||
+            String(form.source || "").includes("Lump Sum")
+          ) {
+            return recoverLumpSumCostAndMarkup(form);
           }
           return form;
         });
@@ -298,6 +300,7 @@ export default function EditCustomerFieldCopy() {
           totalPrice: Number(totalPrice) || 0,
           cost: finalCost,
           markUp: finalMarkUp,   // ✅ only ONE key going forward
+          markup: finalMarkUp,
         };
       }
     });
@@ -344,6 +347,14 @@ export default function EditCustomerFieldCopy() {
           totalPrice: Number(totalPrice) || 0,
           cost: finalCost,
           markUp: finalMarkUp,
+          // Schema field is `markup` — must persist or edit form loses markUp
+          markup: finalMarkUp,
+          isTaxable:
+            persisted.isTaxable === true ||
+            persisted.isTaxable === "true" ||
+            String(persisted.isTaxable || "")
+              .trim()
+              .toLowerCase() === "yes",
         };
       }
     });
@@ -394,6 +405,13 @@ export default function EditCustomerFieldCopy() {
   // };
 
   const groupByType = (compiledData, laborData) => {
+    const lineIsTaxable = (line) =>
+      line?.isTaxable === true ||
+      line?.isTaxable === "true" ||
+      String(line?.isTaxable || "")
+        .trim()
+        .toLowerCase() === "yes";
+
     const groupedData = compiledData.reduce((acc, item) => {
       const { type, ...copyData } = item;
 
@@ -403,9 +421,13 @@ export default function EditCustomerFieldCopy() {
       // Find the corresponding labor information for the current type
       const laborInfo = laborData.find((labor) => labor.jobType === type);
 
-      // Get labor cost and taxable status, default to 0 and false if not found
+      // Get labor cost and taxable status, default to 0 and false if not found.
+      // Also honor the line's own Taxable (Source=Labor Taxable=Yes → RT), even when
+      // crew laborData has a different job type (e.g. HARDSCAPE) or is missing.
       const laborCost = laborInfo ? laborInfo.totalPrice : 0;
-      const isLaborTaxable = laborInfo ? laborInfo.isLaborTaxable : false;
+      const isLaborTaxable =
+        (laborInfo ? !!laborInfo.isLaborTaxable : false) ||
+        lineIsTaxable(item);
 
       if (existingGroup) {
         // Set the labor cost only once, not for every copy
@@ -1615,7 +1637,15 @@ export default function EditCustomerFieldCopy() {
                               onChange={(e) => handleInputChange(e, index)}
                               id={`isTaxable-${index}`}
                               className="border-b border-[grey] outline-none w-[180px]"
-                              value={formData.isTaxable}
+                              value={
+                                formData.isTaxable === true ||
+                                formData.isTaxable === "true"
+                                  ? "true"
+                                  : formData.isTaxable === false ||
+                                      formData.isTaxable === "false"
+                                    ? "false"
+                                    : ""
+                              }
                               required
                             >
                               <option value="">Select Option</option>
@@ -1631,7 +1661,14 @@ export default function EditCustomerFieldCopy() {
                               id={`measure-${index}`}
                               name="cost"
                               onChange={(e) => handleInputChange(e, index)}
-                              value={formData.cost}
+                              value={
+                                formData.source === "Lump Sum" ||
+                                String(formData.source || "").includes("Lump Sum")
+                                  ? formData.cost === 0 || formData.cost === "0"
+                                    ? formData.cost
+                                    : formData.cost ?? ""
+                                  : formData.cost
+                              }
                               placeholder="Enter Cost "
                             // readOnly={
                             //   formData.source === "Other" ? false : true
@@ -1647,7 +1684,7 @@ export default function EditCustomerFieldCopy() {
                               id={`measure-${index}`}
                               name="markUp"
                               onChange={(e) => handleInputChange(e, index)}
-                              value={formData.markUp}
+                              value={formData.markUp ?? formData.markup ?? ""}
                               placeholder="Enter markUp"
                             // readOnly={
                             //   formData.source === "Other" ? false : true
@@ -1764,7 +1801,15 @@ export default function EditCustomerFieldCopy() {
                               onChange={(e) => handleInputChange(e, index)}
                               id={`isTaxable-${index}`}
                               className="border-b border-[grey] outline-none w-[180px]"
-                              value={formData.isTaxable}
+                              value={
+                                formData.isTaxable === true ||
+                                formData.isTaxable === "true"
+                                  ? "true"
+                                  : formData.isTaxable === false ||
+                                      formData.isTaxable === "false"
+                                    ? "false"
+                                    : ""
+                              }
                               required
                             >
                               <option value="">Select Option</option>
@@ -1780,7 +1825,14 @@ export default function EditCustomerFieldCopy() {
                               id={`measure-${index}`}
                               name="cost"
                               onChange={(e) => handleInputChange(e, index)}
-                              value={formData.cost}
+                              value={
+                                formData.source === "Lump Sum" ||
+                                String(formData.source || "").includes("Lump Sum")
+                                  ? formData.cost === 0 || formData.cost === "0"
+                                    ? formData.cost
+                                    : formData.cost ?? ""
+                                  : formData.cost
+                              }
                               placeholder="Enter Cost "
                             // readOnly={
                             //   formData.source === "Other" ? false : true
@@ -1796,7 +1848,7 @@ export default function EditCustomerFieldCopy() {
                               id={`measure-${index}`}
                               name="markUp"
                               onChange={(e) => handleInputChange(e, index)}
-                              value={formData.markUp}
+                              value={formData.markUp ?? formData.markup ?? ""}
                               placeholder="Enter markUp"
                             // readOnly={
                             //   formData.source === "Other" ? false : true
@@ -1982,7 +2034,15 @@ export default function EditCustomerFieldCopy() {
                               onChange={(e) => handleInputChange(e, index)}
                               id={`isTaxable-${index}`}
                               className="border-b border-[grey] outline-none w-[180px]"
-                              value={formData.isTaxable}
+                              value={
+                                formData.isTaxable === true ||
+                                formData.isTaxable === "true"
+                                  ? "true"
+                                  : formData.isTaxable === false ||
+                                      formData.isTaxable === "false"
+                                    ? "false"
+                                    : ""
+                              }
                               required
                             >
                               <option value="">Select Option</option>
