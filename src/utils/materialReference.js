@@ -232,14 +232,49 @@ export function finalizeLaborSummaryRow(row) {
   };
 }
 
-/** Generate Customer Copy only: same as Add Field Copy Labor — cost + (cost × markup / 100). */
+/** Generate Customer Copy only: saved cost/markup as-is; else cost = half of total, markup 100%. */
 export function recalcLaborGenerateCustomerLine(form) {
   if (!form || form.source !== "Labor") return form;
-  const cost = parseFloat(form.cost) || 0;
-  const markupPct = parseFloat(form.markup ?? form.markUp) || 0;
-  const totalPrice = cost + (cost * markupPct) / 100;
+
+  const rawCost = form.cost;
+  const hasSavedCost =
+    rawCost !== "" &&
+    rawCost != null &&
+    rawCost !== undefined &&
+    Number.isFinite(parseFloat(rawCost)) &&
+    parseFloat(rawCost) > 0;
+
+  let cost = parseFloat(form.cost) || 0;
+  let markupPct = parseFloat(form.markup ?? form.markUp);
+  if (!Number.isFinite(markupPct) || markupPct < 0) markupPct = 0;
+
+  const storedTotal = parseFloat(form.totalPrice);
+  const storedPrice = parseFloat(form.price);
+  const qty = parseFloat(form.quantity);
+  const qtySafe = Number.isFinite(qty) && qty > 0 ? qty : 1;
+
+  let totalPrice = 0;
+
+  if (hasSavedCost) {
+    totalPrice = cost + (cost * markupPct) / 100;
+    if (!(totalPrice > 0) && Number.isFinite(storedTotal) && storedTotal > 0) {
+      totalPrice = storedTotal;
+    }
+  } else {
+    if (Number.isFinite(storedTotal) && storedTotal > 0) {
+      totalPrice = storedTotal;
+    } else if (Number.isFinite(storedPrice) && storedPrice > 0) {
+      totalPrice = storedPrice * qtySafe;
+    }
+    if (totalPrice > 0) {
+      cost = Math.round((totalPrice / 2) * 100) / 100;
+      markupPct = 100;
+    }
+  }
+
   return {
     ...form,
+    cost,
     totalCost: cost,
     totalPrice,
     markup: markupPct,
