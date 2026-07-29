@@ -2315,23 +2315,6 @@ const handleInvoiceJobType = (jobType) => {
                     </span>
                   </div>
                 )}
-                {markup !== null && markup !== undefined && (
-                  <div
-                    className={`${workSummaryGridClass} my-2 items-baseline uppercase`}
-                  >
-                    <span className="col-span-3 min-w-0">MARKUP</span>
-                    <span className="min-w-0" aria-hidden />
-                    <span className="min-w-0" aria-hidden />
-                    <span className="min-w-0" aria-hidden />
-                    <span className="text-end tabular-nums whitespace-nowrap">
-                      {markup.toLocaleString("en-US", {
-                        minimumFractionDigits: 0,
-                        maximumFractionDigits: 2,
-                      })}
-                      %
-                    </span>
-                  </div>
-                )}
                 <div
                   className={`${workSummaryGridClass} my-2 items-baseline uppercase`}
                 >

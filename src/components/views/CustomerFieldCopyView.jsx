@@ -19,6 +19,7 @@ import {
   getCustomerCopyDisplayDescription,
   getCustomerCopyMaterialsTableDisplayDescription,
   getCustomerCopyMaterialsTableMergeKey,
+  isLumpSumFieldCopySource,
   isLumpSumLaborFieldCopyItem,
   lookupJobTypeCatalogRate,
   lookupLaborMapValue,
@@ -310,24 +311,98 @@ Approved by: __________________  Date: ____________________`,
 
   // console.log("Labor Data", laborData)
 
+  const buildCustomerCopyDisplayFieldCopies = useCallback(
+    (copies) => {
+      const base = Array.isArray(copies) ? copies : [];
+      const wantDate = String(entryDate || "").trim();
+
+      const officeLumpSumLines = [];
+      const collectOfficeLumpSums = (entries) => {
+        if (!Array.isArray(entries)) return;
+        for (const entry of entries) {
+          const entryKey = String(entry?.entryDate || "").trim();
+          if (wantDate && entryKey && entryKey !== wantDate) continue;
+          for (const fc of entry?.fieldCopies || []) {
+            if (fc?.status === "Delete") continue;
+            if (isLumpSumFieldCopySource(fc?.source)) {
+              officeLumpSumLines.push(fc);
+            }
+          }
+        }
+      };
+
+      collectOfficeLumpSums(formData?.officeFieldCopy);
+      collectOfficeLumpSums(
+        formData?.draftCopy?.map((d) => ({
+          entryDate: d?.entryDate,
+          fieldCopies: d?.draftCopies,
+        }))
+      );
+
+      const lumpSumDedupeKey = (item) => {
+        const baseRef =
+          materialNameBaseForEdit(
+            String(item?.reference || item?.referenceBase || ""),
+            item?.vendorName
+          )
+            .trim()
+            .toUpperCase() ||
+          String(item?.type || item?.jobType || "")
+            .trim()
+            .toUpperCase();
+        const typeKey = String(item?.type || item?.jobType || "")
+          .trim()
+          .toUpperCase();
+        const taxable =
+          item?.isTaxable === true ||
+          item?.isTaxable === "true" ||
+          String(item?.isTaxable || "")
+            .trim()
+            .toLowerCase() === "yes";
+        return `${baseRef}|${typeKey}|${taxable}|${Number(item?.cost) || 0}|${Number(item?.totalPrice) || 0}`;
+      };
+
+      const existingKeys = new Set(
+        base
+          .filter((fc) => isLumpSumFieldCopySource(fc?.source))
+          .map(lumpSumDedupeKey)
+      );
+
+      const supplemental = officeLumpSumLines.filter(
+        (fc) => !existingKeys.has(lumpSumDedupeKey(fc))
+      );
+      if (!supplemental.length) return base;
+      return [...base, ...supplemental];
+    },
+    [entryDate, formData?.draftCopy, formData?.officeFieldCopy]
+  );
+
   useEffect(() => {
     if (
       fieldCopies.length > 0 ||
       materialData.length > 0 ||
-      laborData.length > 0
+      laborData.length > 0 ||
+      formData?.officeFieldCopy?.length > 0
     ) {
-      const summarizedData = summarizeFieldCopies(fieldCopies).filter(
+      const displayCopies = buildCustomerCopyDisplayFieldCopies(fieldCopies);
+      const summarizedData = summarizeFieldCopies(displayCopies).filter(
         (item) => !isLumpSumLaborFieldCopyItem(item)
       );
 
       setCategorizedFieldCopies([
         { category: "Materials & Other", items: summarizedData },
       ]);
-      const { laborTotal, materialsTotal } = calculateTotals(fieldCopies);
+      const { laborTotal, materialsTotal } = calculateTotals(displayCopies);
       setLaborTotal(laborTotal);
       setMaterialsTotal(materialsTotal);
     }
-  }, [fieldCopies]);
+  }, [
+    buildCustomerCopyDisplayFieldCopies,
+    fieldCopies,
+    formData?.officeFieldCopy,
+    laborData.length,
+    materialData.length,
+  ]);
 
   useEffect(() => {
     getProjectById();
@@ -598,7 +673,7 @@ Approved by: __________________  Date: ____________________`,
       ? lookupLaborMapValue(laborManHoursByJobType, itemJt)
       : 0;
 
-    const isLumpSum = String(item?.source || "") === "Lump Sum";
+    const isLumpSum = isLumpSumFieldCopySource(item?.source);
 
     let qty = 0;
     let qtyDisplay = "";
@@ -641,13 +716,46 @@ Approved by: __________________  Date: ____________________`,
       maximumFractionDigits: 2,
     });
 
+  /** PDF currency — $ left, amount right; fixed width (not full column) for moderate gap. */
+  const renderCurrencyAmount = (n, { allowZero = false } = {}) => {
+    const num = Number(n);
+    if (!Number.isFinite(num)) return null;
+    if (!allowZero && num <= 0) return null;
+    const amount = formatMoney(num);
+    const boxWidth = amount.length > 9 ? "5rem" : "4rem";
+    return (
+      <span
+        style={{
+          display: "inline-flex",
+          justifyContent: "space-between",
+          alignItems: "baseline",
+          width: boxWidth,
+          minWidth: boxWidth,
+          whiteSpace: "nowrap",
+        }}
+      >
+        <span style={{ fontWeight: 700 }}>$</span>
+        <span>{amount}</span>
+      </span>
+    );
+  };
+
+  const renderPdfMoneyCellContent = (n) => renderCurrencyAmount(n);
+
+  const formatCurrencyDisplay = (n, alignRight = false) =>
+    alignRight ? (
+      renderCurrencyAmount(n, { allowZero: true })
+    ) : (
+      <span style={{ whiteSpace: "nowrap" }}>{`$ ${formatMoney(n)}`}</span>
+    );
+
   /** Customer Copy — hide quantity for Source=Labor field-copy lines only. */
   const shouldHideCustomerCopySourceLaborQuantity = (item) =>
     String(item?.source || "").toLowerCase() === "labor";
 
   /** Customer Copy — Lump Sum has no qty on generate form; never show a forced 1. */
   const shouldHideCustomerCopyLumpSumQuantity = (item) =>
-    String(item?.source || "") === "Lump Sum";
+    isLumpSumFieldCopySource(item?.source);
 
   /** Materials & Other — merge labor rows when display description is exactly the same. */
   const customerCopyMergedTableRows = useMemo(() => {
@@ -777,6 +885,12 @@ Approved by: __________________  Date: ____________________`,
 
   const renderCustomerCopyTableBody = (variant = "view") => {
     const isPdf = variant === "pdf";
+    const pdfMoneyCellStyle = {
+      textAlign: "right",
+      whiteSpace: "nowrap",
+      paddingRight: "2px",
+      verticalAlign: "top",
+    };
 
     return (
       <>
@@ -822,22 +936,25 @@ Approved by: __________________  Date: ____________________`,
                       : ""}
                   </td>
                 )}
-                <td
-                  className={isPdf ? "text-xs" : undefined}
-                  style={isPdf ? { textAlign: "right" } : undefined}
-                >
-                  {!hidePdfLaborFields &&
-                  d.displayPrice != null &&
-                  d.displayPrice > 0
-                    ? formatMoney(d.displayPrice)
-                    : ""}
-                </td>
-                <td
-                  className={isPdf ? "text-xs" : undefined}
-                  style={isPdf ? { textAlign: "right" } : undefined}
-                >
-                  {d.displayTotal > 0 ? formatMoney(d.displayTotal) : ""}
-                </td>
+                {isPdf ? (
+                  <>
+                    <td className="text-xs" style={pdfMoneyCellStyle} />
+                    <td className="text-xs" style={pdfMoneyCellStyle}>
+                      {renderPdfMoneyCellContent(d.displayTotal)}
+                    </td>
+                  </>
+                ) : (
+                  <>
+                    <td>
+                      {d.displayPrice != null && d.displayPrice > 0
+                        ? formatMoney(d.displayPrice)
+                        : ""}
+                    </td>
+                    <td>
+                      {d.displayTotal > 0 ? formatMoney(d.displayTotal) : ""}
+                    </td>
+                  </>
+                )}
               </tr>
             );
           }
@@ -890,20 +1007,26 @@ Approved by: __________________  Date: ____________________`,
               )}
               <td
                 className={isPdf ? "text-xs" : undefined}
-                style={isPdf ? { textAlign: "right" } : undefined}
+                style={isPdf ? pdfMoneyCellStyle : undefined}
               >
                 {!hidePdfLaborFields &&
                 d.displayPrice != null &&
                 !Number.isNaN(d.displayPrice) &&
                 d.displayPrice > 0
-                  ? formatMoney(d.displayPrice)
+                  ? isPdf
+                    ? renderPdfMoneyCellContent(d.displayPrice)
+                    : formatMoney(d.displayPrice)
                   : ""}
               </td>
               <td
                 className={isPdf ? "text-xs" : undefined}
-                style={isPdf ? { textAlign: "right" } : undefined}
+                style={isPdf ? pdfMoneyCellStyle : undefined}
               >
-                {d.totalVal > 0 ? formatMoney(d.totalVal) : ""}
+                {d.totalVal > 0
+                  ? isPdf
+                    ? renderPdfMoneyCellContent(d.totalVal)
+                    : formatMoney(d.totalVal)
+                  : ""}
               </td>
             </tr>
           );
@@ -933,7 +1056,7 @@ Approved by: __________________  Date: ____________________`,
                   <>{sourceLaborLabel.toUpperCase()}</>
                 ) : item.source === "Labor" ? (
                   <>{item.jobType?.toUpperCase()} LABOR</>
-                ) : item.source === "Lump Sum" && item.reference ? (
+                ) : isLumpSumFieldCopySource(item.source) && item.reference ? (
                   <>
                     {materialNameBaseForEdit(
                       String(item.reference),
@@ -958,7 +1081,7 @@ Approved by: __________________  Date: ____________________`,
                       ? item.isTaxable
                         ? "RT"
                         : "RNT"
-                      : ["Lump Sum"].includes(item.source)
+                      : isLumpSumFieldCopySource(item.source)
                         ? `${item.isTaxable ? "RT" : "RNT"} (SALES TAX PAID ON MATERIAL)`
                         : "RT"
                     : formData.customerType === "Commercial"
@@ -967,14 +1090,10 @@ Approved by: __________________  Date: ____________________`,
                 </b>
               )}
             </span>
-            <span>
-              <b>$</b>{" "}
-              <span className={compact ? "inline-block w-[80px] text-end" : undefined}>
-                {item.totalPrice?.toLocaleString("en-US", {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}
-              </span>
+            <span className={compact ? "shrink-0 ml-auto" : undefined}>
+              {compact
+                ? formatCurrencyDisplay(item.totalPrice, true)
+                : formatCurrencyDisplay(item.totalPrice)}
             </span>
           </div>
         );
@@ -1001,14 +1120,10 @@ Approved by: __________________  Date: ____________________`,
                 </b>
               )}
             </span>
-            <span>
-              <b>$</b>{" "}
-              <span className={compact ? "inline-block w-[80px] text-end" : undefined}>
-                {item.totalPrice?.toLocaleString("en-US", {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}
-              </span>
+            <span className={compact ? "shrink-0 ml-auto" : undefined}>
+              {compact
+                ? formatCurrencyDisplay(item.totalPrice, true)
+                : formatCurrencyDisplay(item.totalPrice)}
             </span>
           </div>
         );
@@ -1041,7 +1156,7 @@ Approved by: __________________  Date: ____________________`,
     const categorizedData = materialData.reduce((result, item) => {
       const category = item.source === "Labor" ? "Labor" : "F&G/Other/LumpSum";
       const reference = String(item?.reference || "").trim();
-      const isLumpSum = String(item?.source || "") === "Lump Sum";
+      const isLumpSum = isLumpSumFieldCopySource(item?.source);
       // Invoice Summary: same Lump Sum description + same taxable → one line (sum totals); no vendor in label/key.
       const lumpSumBaseRef = isLumpSum
         ? materialNameBaseForEdit(reference, item.vendorName).trim() ||
@@ -1102,6 +1217,7 @@ Approved by: __________________  Date: ____________________`,
   }
 
   const jobTypeForCustomerCopyTableRow = (row) => {
+    if (row?.jobType || row?.type) return row.jobType || row.type;
     const refKey = String(row?.reference || "").trim().toUpperCase();
     for (const fc of fieldCopies || []) {
       const fcRef = String(fc?.reference || "").trim().toUpperCase();
@@ -1124,19 +1240,12 @@ Approved by: __________________  Date: ____________________`,
   /** Invoice summary rows — rebuilt from Materials & Other table totals (not API materialData). */
   const customerCopyInvoiceSummaryRows = useMemo(() => {
     const tableItems = categorizedFieldCopies?.[0]?.items ?? [];
-    const taxableJobTypeKeys = new Set();
-    for (const row of tableItems) {
-      if (!row?.isTaxable) continue;
-      const jt = jobTypeForCustomerCopyTableRow(row);
-      const key = normalizeJobTypeKey(jt);
-      if (key) taxableJobTypeKeys.add(key);
-    }
 
     const laborTaxLookup = {
       materialData,
       officeFieldCopy: formData?.officeFieldCopy,
       draftCopy: formData?.draftCopy,
-      taxableJobTypeKeys,
+      jobTypesCatalog,
     };
 
     const materialSeeds = tableItems.map((row) => {
@@ -1153,25 +1262,12 @@ Approved by: __________________  Date: ____________________`,
         String(row?.isTaxable || "")
           .trim()
           .toLowerCase() === "yes";
-      const resolvedLaborTax = isSourceLabor
-        ? lineTaxable ||
-          resolveCustomerCopyCrewLaborTaxable(
-            {
-              jobType,
-              isTaxable: row?.isTaxable,
-              isLaborTaxable: row?.isTaxable,
-            },
-            fieldCopies,
-            formData?.jobType,
-            laborTaxLookup
-          )
-        : lineTaxable;
       return {
         jobType,
         reference: row?.reference,
         source: row?.source,
-        isTaxable: isSourceLabor ? resolvedLaborTax : row?.isTaxable,
-        isLaborTaxable: isSourceLabor ? resolvedLaborTax : undefined,
+        isTaxable: isSourceLabor ? lineTaxable : row?.isTaxable,
+        isLaborTaxable: isSourceLabor ? lineTaxable : undefined,
         dataType: "Material",
         totalPrice: sell,
         quantity: row?.quantity,
@@ -1485,18 +1581,20 @@ Approved by: __________________  Date: ____________________`,
         return;
       }
 
-      const baseMaterialName = materialNameBaseForEdit(
-        String(item.reference || ""),
-        item.vendorName
-      ).trim();
+      const isLumpSum = isLumpSumFieldCopySource(item.source);
+      const baseMaterialName =
+        materialNameBaseForEdit(
+          String(item.reference || item.referenceBase || ""),
+          item.vendorName
+        ).trim() ||
+        (isLumpSum ? String(item.type || item.jobType || "Lump Sum").trim() : "");
       const materialKey = baseMaterialName.toUpperCase();
       if (!materialKey) return;
 
-      const isLumpSum = String(item.source || "") === "Lump Sum";
       const vendorName = String(item.vendorName || item.vendor || "").trim();
-      // Lump Sum: keep separate lines (different vendors / totals) — do not merge by name only.
+      // Lump Sum (View only): merge same base description + taxable; Edit keeps separate rows in DB.
       const key = isLumpSum
-        ? `${String(item.source || "").trim()}-${materialKey}-${vendorName.toUpperCase()}-${num(item.totalPrice)}-${num(item.cost)}`
+        ? `${String(item.source || "").trim()}-${materialKey}-${!!item.isTaxable}`
         : `${String(item.source || "").trim()}-${materialKey}`;
 
       const qty = num(item.quantity);
@@ -1506,16 +1604,17 @@ Approved by: __________________  Date: ____________________`,
           ? num(item.cost)
           : 0;
       const markupRaw = item.markUp ?? item.markup;
+      const lineTotal = num(item.totalPrice);
+      const lineCostTotal = unitCost > 0 ? unitCost : 0;
 
       if (!summary[key]) {
         summary[key] = {
-          source: item.source,
+          source: isLumpSum ? "Lump Sum" : item.source,
           isTaxable: item.isTaxable,
-          reference: isLumpSum
-            ? String(item.reference || baseMaterialName).trim() ||
-              baseMaterialName
-            : baseMaterialName,
-          vendorName,
+          reference: baseMaterialName,
+          type: item.type || item.jobType,
+          jobType: item.type || item.jobType,
+          vendorName: isLumpSum ? "" : vendorName,
           size: item.measure,
           quantity: 0,
           price: 0,
@@ -1528,18 +1627,11 @@ Approved by: __________________  Date: ____________________`,
 
       const row = summary[key];
       row.quantity += qty;
-      row.totalPrice += num(item.totalPrice);
+      row.totalPrice += lineTotal;
+      row.cost = (Number(row.cost) || 0) + lineCostTotal;
 
       if (unitPrice > row.price) {
         row.price = unitPrice;
-        if (markupRaw != null && markupRaw !== "") {
-          row.markup = num(markupRaw);
-          row.markUp = row.markup;
-        }
-      }
-
-      if (unitCost > row.cost) {
-        row.cost = unitCost;
       }
 
       if (
@@ -1555,13 +1647,23 @@ Approved by: __________________  Date: ____________________`,
       if (!row.size && item.measure) {
         row.size = item.measure;
       }
-      if (isLumpSum && vendorName && !row.vendorName) {
+      if (!isLumpSum && vendorName && !row.vendorName) {
         row.vendorName = vendorName;
+      }
+      if (isLumpSum) {
+        const mergedCost = Number(row.cost) || 0;
+        const mergedTotal = Number(row.totalPrice) || 0;
+        if (mergedCost > 0 && mergedTotal > 0) {
+          const mergedMarkup =
+            Math.round(((mergedTotal - mergedCost) / mergedCost) * 10000) / 100;
+          row.markUp = mergedMarkup;
+          row.markup = mergedMarkup;
+        }
       }
     });
 
     const finalizeMaterialSummaryRow = (row) => {
-      const isLumpSum = String(row.source || "") === "Lump Sum";
+      const isLumpSum = isLumpSumFieldCopySource(row.source);
       const markupPct = parseFloat(row.markup ?? row.markUp) || 0;
       let qty = num(row.quantity);
       // Lump Sum: never invent quantity 1 (generate form has no qty field).
@@ -2002,20 +2104,35 @@ Approved by: __________________  Date: ____________________`,
                           </colgroup>
                           <thead>
                             <tr>
-                              <th className="text-xs" style={{ textAlign: "left" }}>
-                                <span className="relative -top-1.5">DESCRIPTION</span>
+                              <th
+                                className="text-xs pb-1"
+                                style={{ textAlign: "left", verticalAlign: "bottom" }}
+                              >
+                                DESCRIPTION
                               </th>
-                              <th className="text-xs" style={{ textAlign: "center" }}>
-                                <span className="relative -top-1.5">SIZE</span>
+                              <th
+                                className="text-xs pb-1"
+                                style={{ textAlign: "center", verticalAlign: "bottom" }}
+                              >
+                                SIZE
                               </th>
-                              <th className="text-xs" style={{ textAlign: "center" }}>
-                                <span className="relative -top-1.5">QUANTITY</span>
+                              <th
+                                className="text-xs pb-1"
+                                style={{ textAlign: "center", verticalAlign: "bottom" }}
+                              >
+                                QUANTITY
                               </th>
-                              <th className="text-xs" style={{ textAlign: "right" }}>
-                                <span className="relative -top-1.5">PRICE</span>
+                              <th
+                                className="text-xs pb-1"
+                                style={{ textAlign: "right", verticalAlign: "bottom" }}
+                              >
+                                PRICE
                               </th>
-                              <th className="text-xs" style={{ textAlign: "right" }}>
-                                <span className="relative -top-1.5">TOTAL</span>
+                              <th
+                                className="text-xs pb-1"
+                                style={{ textAlign: "right", verticalAlign: "bottom" }}
+                              >
+                                TOTAL
                               </th>
                             </tr>
                           </thead>
@@ -2054,7 +2171,7 @@ Approved by: __________________  Date: ____________________`,
                                 ? material.isTaxable
                                   ? "RT"
                                   : "RNT"
-                                : ["Lump Sum"].includes(material.source)
+                                : isLumpSumFieldCopySource(material.source)
                                 ? `${
                                     material.isTaxable ? "RT" : "RNT"
                                   } (SALES TAX PAID ON MATERIAL)`
@@ -2132,15 +2249,10 @@ Approved by: __________________  Date: ____________________`,
                               </>
                             )}
                           </span>
-                          <span className={creditHighlightClass(formData.taxCredits)}>
-                            <b>$</b>{" "}
-                            <span className="inline-block w-[80px] text-end">
-                              {" "}
-                              {formData.taxCredits?.toLocaleString("en-US", {
-                                minimumFractionDigits: 2,
-                                maximumFractionDigits: 2,
-                              })}
-                            </span>
+                          <span
+                            className={`shrink-0 ml-auto ${creditHighlightClass(formData.taxCredits)}`}
+                          >
+                            {formatCurrencyDisplay(formData.taxCredits || 0, true)}
                           </span>
                         </div>
                         <div className="flex justify-between my-2">
@@ -2160,16 +2272,9 @@ Approved by: __________________  Date: ____________________`,
                             )}
                           </span>
                           <span
-                            className={creditHighlightClass(formData.nonTaxCredits)}
+                            className={`shrink-0 ml-auto ${creditHighlightClass(formData.nonTaxCredits)}`}
                           >
-                            <b>$</b>{" "}
-                            <span className="inline-block w-[80px] text-end">
-                              {" "}
-                              {formData.nonTaxCredits?.toLocaleString("en-US", {
-                                minimumFractionDigits: 2,
-                                maximumFractionDigits: 2,
-                              })}
-                            </span>
+                            {formatCurrencyDisplay(formData.nonTaxCredits || 0, true)}
                           </span>
                         </div>
                       </>
@@ -2177,17 +2282,8 @@ Approved by: __________________  Date: ____________________`,
                     <hr />
                     <div className="flex justify-between my-1 mb-2">
                       <span>SUBTOTAL</span>
-                      <span>
-                        <b>$</b>{" "}
-                        <span className="inline-block w-[80px] text-end">
-                          {customerCopyInvoiceNetSubtotal.toLocaleString(
-                            "en-US",
-                            {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            }
-                          )}
-                        </span>
+                      <span className="shrink-0 ml-auto">
+                        {formatCurrencyDisplay(customerCopyInvoiceNetSubtotal, true)}
                       </span>
                     </div>
                     {/* {!formData.isProjectTaxable && (
@@ -2211,72 +2307,43 @@ Approved by: __________________  Date: ____________________`,
                     <hr />
                     <div className="flex justify-between my-1 mb-2">
                       <span>TAXABLE AMOUNT</span>
-                      <span>
-                        <b>$</b>{" "}
-                        {formData.isProjectTaxable ? (
-                          <span className="inline-block w-[80px] text-end">
-                            {(
-                              taxableAmount - formData.taxCredits
-                            )?.toLocaleString("en-US", {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })}
-                          </span>
-                        ) : (
-                          <span className="inline-block w-[80px] text-end">
-                            {formData.taxCredits > taxableAmount
+                      <span className="shrink-0 ml-auto">
+                        {formatCurrencyDisplay(
+                          formData.isProjectTaxable
+                            ? Math.max(
+                                0,
+                                Number(taxableAmount) - Number(formData.taxCredits || 0)
+                              )
+                            : formData.taxCredits > taxableAmount
                               ? 0
-                              : taxableAmount?.toLocaleString("en-US", {
-                                minimumFractionDigits: 2,
-                                maximumFractionDigits: 2,
-                              })}
-                          </span>
+                              : Number(taxableAmount) || 0,
+                          true
                         )}
                       </span>
                     </div>
                     <hr />
                     <div className="flex justify-between my-1 mb-2">
                       <span>SALES TAX</span>
-                      <span>
-                        <b>$</b>{" "}
-                        <span className="inline-block w-[80px] text-end">
-                          {formData.isProjectTaxable ? (
-                            (
-                              (taxPercent *
-                                (taxableAmount - formData.taxCredits)) /
-                              100
-                            )?.toLocaleString("en-US", {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })
-                          ) : (
-                            <span className="inline-block w-[80px] text-end">
-                              {formData.taxCredits > taxableAmount
-                                ? 0
-                                : (
-                                  (taxPercent * taxableAmount) /
-                                  100
-                                )?.toLocaleString("en-US", {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                })}
-                            </span>
-                          )}
-                        </span>
+                      <span className="shrink-0 ml-auto">
+                        {formatCurrencyDisplay(
+                          formData.isProjectTaxable
+                            ? (taxPercent *
+                                (Number(taxableAmount) -
+                                  Number(formData.taxCredits || 0))) /
+                                100
+                            : formData.taxCredits > taxableAmount
+                              ? 0
+                              : (taxPercent * Number(taxableAmount)) / 100,
+                          true
+                        )}
                       </span>
                     </div>
                     <hr />
                     <div className="flex justify-between my-1">
                       <span>GRAND TOTAL</span>
-                      <span>
-                        <b>$</b>{" "}
-                        <span className="inline-block w-[80px] text-end">
-                          <span className="border-b border-black pb-[7px]">
-                            {customerCopyGrandTotal.toLocaleString("en-US", {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })}
-                          </span>
+                      <span className="shrink-0 ml-auto">
+                        <span className="border-b border-black pb-[7px] inline-block">
+                          {formatCurrencyDisplay(customerCopyGrandTotal, true)}
                         </span>
                       </span>
                     </div>

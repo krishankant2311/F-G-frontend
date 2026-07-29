@@ -317,7 +317,26 @@ export default function EditCustomerFieldCopy() {
         form.source === "Labor"
           ? recalcLaborGenerateCustomerLine(form)
           : form;
-      const persisted = toPersistedCopy(row);
+      let persisted = toPersistedCopy(row);
+
+      const isLumpSum =
+        persisted.source === "Lump Sum" ||
+        String(persisted.source || "").includes("Lump Sum");
+
+      // Lump Sum (Generate save): base description only; keep vendorName — do not merge rows here.
+      if (isLumpSum) {
+        const baseRef =
+          materialNameBaseForEdit(
+            String(persisted.reference || persisted.referenceBase || ""),
+            persisted.vendorName
+          ).trim() || String(persisted.reference || "").trim();
+        persisted = {
+          ...persisted,
+          reference: baseRef,
+          referenceBase: baseRef,
+        };
+      }
+
       const {
         reference,
         quantity,
@@ -327,6 +346,7 @@ export default function EditCustomerFieldCopy() {
         markUp,
         markup,
         source,
+        vendorName,
       } = persisted;
 
       const finalMarkUp =
@@ -335,11 +355,22 @@ export default function EditCustomerFieldCopy() {
           : Number(markup) || 0;
 
       const finalCost = Number(cost) || 0;
-      const key = `${source}-${type}-${reference}`;
+      const taxableKey =
+        persisted.isTaxable === true ||
+        persisted.isTaxable === "true" ||
+        String(persisted.isTaxable || "")
+          .trim()
+          .toLowerCase() === "yes";
+      const key = isLumpSum
+        ? `${source}-${type}-${reference}-${String(vendorName || "")
+            .trim()
+            .toUpperCase()}-${finalCost}-${Number(totalPrice) || 0}`
+        : `${source}-${type}-${reference}`;
 
       if (compiled[key]) {
         compiled[key].quantity += Number(quantity) || 0;
         compiled[key].totalPrice += Number(totalPrice) || 0;
+        compiled[key].cost = (Number(compiled[key].cost) || 0) + finalCost;
       } else {
         compiled[key] = {
           ...persisted,
@@ -347,14 +378,8 @@ export default function EditCustomerFieldCopy() {
           totalPrice: Number(totalPrice) || 0,
           cost: finalCost,
           markUp: finalMarkUp,
-          // Schema field is `markup` — must persist or edit form loses markUp
           markup: finalMarkUp,
-          isTaxable:
-            persisted.isTaxable === true ||
-            persisted.isTaxable === "true" ||
-            String(persisted.isTaxable || "")
-              .trim()
-              .toLowerCase() === "yes",
+          isTaxable: taxableKey,
         };
       }
     });

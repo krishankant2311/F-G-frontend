@@ -47,6 +47,8 @@ export function getLaborPdfDescription({ labor, groupItems, fieldCopies }) {
 
 export function isFieldCopyLaborContext(item) {
   if (!item) return false;
+  const src = String(item?.source ?? "").trim();
+  if (src === "Lump Sum" || src.includes("Lump Sum")) return false;
   if (item.source === "Labor") return true;
   return String(item.reference || "")
     .toUpperCase()
@@ -61,6 +63,12 @@ function hasStoredUnitPrice(item) {
     !Number.isNaN(Number(p)) &&
     Number(p) > 0
   );
+}
+
+/** Source dropdown value for Lump Sum lines (exact or legacy variants). */
+export function isLumpSumFieldCopySource(source) {
+  const s = String(source ?? "").trim();
+  return s === "Lump Sum" || s.includes("Lump Sum");
 }
 
 /** Source=Labor / Lump Sum / labor-style lines: PRICE shows line total when no unit price. */
@@ -94,17 +102,11 @@ export function isLumpSumLaborLabel(text) {
   return s.includes("LUMP SUM") && s.includes("LABOR");
 }
 
-/** Field-copy / summarized table row that represents lump-sum labor (duplicate of crew row). */
+/** Field-copy row that duplicates crew lump-sum labor (e.g. "HARDSCAPE LUMP SUM LABOR"). */
 export function isLumpSumLaborFieldCopyItem(item) {
   if (!item) return false;
   const ref = String(item.reference || item.description || "").trim();
-  if (isLumpSumLaborLabel(ref)) return true;
-  const src = String(item.source || "").toUpperCase();
-  const type = String(item.type || "").toUpperCase();
-  if (src.includes("LUMP SUM") && (ref.toUpperCase().includes("LABOR") || type.includes("LABOR"))) {
-    return true;
-  }
-  return false;
+  return isLumpSumLaborLabel(ref);
 }
 
 /** Crew labor entry whose job type resolves to a lump-sum labor label. */
@@ -495,6 +497,19 @@ export function lookupJobTypeCatalogRate(jobTypesCatalog, jobTypeLabel) {
   return 0;
 }
 
+/** Admin job-type catalog — isTaxable / isLaborTaxable for crew labor RT vs RNT. */
+export function lookupJobTypeCatalogIsTaxable(jobTypesCatalog, jobTypeLabel) {
+  if (!Array.isArray(jobTypesCatalog) || !jobTypeLabel) return undefined;
+  const nk = normalizeJobTypeKey(jobTypeLabel);
+  if (!nk) return undefined;
+  for (const j of jobTypesCatalog) {
+    if (normalizeJobTypeKey(j?.jobName) === nk) {
+      return isCustomerCopyTaxableFlag(j?.isTaxable);
+    }
+  }
+  return undefined;
+}
+
 function isCustomerCopyTaxableFlag(value) {
   if (value === true) return true;
   if (value === false || value == null) return false;
@@ -506,25 +521,6 @@ function isCustomerCopyTaxableFlag(value) {
     if (["false", "0", "no", "n"].includes(v)) return false;
   }
   return Boolean(value);
-}
-
-/** Customer Copy crew labor — RT when labor or matching job-type source line is taxable. */
-function resolveCustomerCopySourceLineJobType(line) {
-  let jt = line?.jobType;
-  if (jt && typeof jt === "object") {
-    jt = jt.jobType || jt.jobName || jt.name;
-  }
-  if (!jt) jt = line?.type;
-  return jt;
-}
-
-function customerCopySourceLineJobTypeKey(line, formDataJobType) {
-  return normalizeJobTypeKey(
-    resolveFieldCopyDisplayJobType({
-      jobType: resolveCustomerCopySourceLineJobType(line),
-      formDataJobType,
-    })
-  );
 }
 
 /** Flatten grouped office/draft field-copy groups into line items with job type. */
@@ -555,117 +551,26 @@ export function flattenGroupedFieldCopySourceLines(
   return lines;
 }
 
-function customerCopyHasTaxableSourceForJobType(
-  laborKey,
-  lines,
-  formDataJobType
-) {
-  if (!laborKey || !Array.isArray(lines)) return false;
-
-  for (const line of lines) {
-    if (
-      customerCopySourceLineJobTypeKey(line, formDataJobType) !== laborKey
-    ) {
-      continue;
-    }
-    if (isCustomerCopyTaxableFlag(line?.isTaxable ?? line?.isLaborTaxable)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function customerCopyHasTaxableLaborSourceLine(
-  laborJobType,
-  lines,
-  formDataJobType
-) {
-  if (!Array.isArray(lines)) return false;
-
-  const laborSource = findLaborSourceLine(lines, laborJobType);
-  if (
-    laborSource &&
-    isCustomerCopyTaxableFlag(
-      laborSource?.isTaxable ?? laborSource?.isLaborTaxable
-    )
-  ) {
-    return true;
-  }
-
-  const laborKey = customerCopySourceLineJobTypeKey(
-    { jobType: laborJobType },
-    formDataJobType
-  );
-  if (!laborKey) return false;
-
-  const standard = getStandardJobTypeLaborLabel(
-    resolveFieldCopyDisplayJobType({
-      jobType: laborJobType,
-      formDataJobType,
-    })
-  );
-
-  for (const line of lines) {
-    if (String(line?.source || "") !== "Labor") continue;
-    if (
-      !isCustomerCopyTaxableFlag(line?.isTaxable ?? line?.isLaborTaxable)
-    ) {
-      continue;
-    }
-    if (customerCopySourceLineJobTypeKey(line, formDataJobType) === laborKey) {
-      return true;
-    }
-    if (standard) {
-      const base = getCustomerCopyInvoiceDescriptionBase({
-        ...line,
-        dataType: "Material",
-        source: "Labor",
-        jobType: resolveCustomerCopySourceLineJobType(line) || laborJobType,
-      });
-      if (base === standard) return true;
-    }
-  }
-
-  return false;
-}
-
+/** Crew labor RT/RNT — admin job-type isTaxable first; else saved labor flag only. */
 export function resolveCustomerCopyCrewLaborTaxable(
   labor,
   fieldCopies,
   formDataJobType,
   extraSources = {}
 ) {
+  const catalogTaxable = lookupJobTypeCatalogIsTaxable(
+    extraSources.jobTypesCatalog,
+    labor?.jobType
+  );
+  if (catalogTaxable !== undefined) {
+    return catalogTaxable;
+  }
+
   if (isCustomerCopyTaxableFlag(labor?.isLaborTaxable ?? labor?.isTaxable)) {
     return true;
   }
 
-  const laborKey = customerCopySourceLineJobTypeKey(labor, formDataJobType);
-  if (!laborKey) return false;
-
-  const sourceLines = [
-    ...(fieldCopies || []),
-    ...(extraSources.materialData || []),
-    ...flattenGroupedFieldCopySourceLines(extraSources.officeFieldCopy),
-    ...flattenGroupedFieldCopySourceLines(
-      (extraSources.draftCopy || []).map((d) => ({
-        fieldCopies: d?.draftCopies,
-      }))
-    ),
-  ];
-
-  return customerCopyHasTaxableSourceForJobType(
-    laborKey,
-    sourceLines,
-    formDataJobType
-  ) ||
-    customerCopyHasTaxableLaborSourceLine(
-      labor?.jobType,
-      sourceLines,
-      formDataJobType
-    ) ||
-    (extraSources.taxableJobTypeKeys instanceof Set &&
-      extraSources.taxableJobTypeKeys.has(laborKey));
+  return false;
 }
 
 /** Prefer primary map values; fill missing keys from fallback. */
@@ -990,6 +895,7 @@ export function getCustomerCopyMaterialsTableDisplayDescription(item) {
  */
 export function getCustomerCopyMaterialsTableMergeKey(item) {
   if (!item) return null;
+  if (isLumpSumFieldCopySource(item?.source)) return null;
   const isLaborLine =
     item?.dataType === "Labor" ||
     String(item?.source || "").toLowerCase() === "labor" ||
