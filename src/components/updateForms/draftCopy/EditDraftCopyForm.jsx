@@ -2404,18 +2404,6 @@ const handleInputChange = (e, index) => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      let isValidPrice = forms.some((form) => {
-        return (
-          Number.parseFloat(form.price) * Number.parseFloat(form.quantity) !==
-          Number.parseFloat(form.totalPrice) && form.source === "F&G"
-        );
-      });
-
-      // if (isValidPrice) {
-      //   toast.error("Please ensure all fields are completed.");
-      //   return;
-      // }
-
       if (forms.length === 0 && laborForms.length === 0) {
         toast.error("Please add some data.");
         return;
@@ -2460,18 +2448,6 @@ const handleInputChange = (e, index) => {
     e.preventDefault();
     try {
       // console.log("Forms", forms);
-
-      let isValidPrice = forms.some((form) => {
-        return (
-          Number.parseFloat(form.price) * Number.parseFloat(form.quantity) !==
-          Number.parseFloat(form.totalPrice) && form.source === "F&G"
-        );
-      });
-
-      if (isValidPrice) {
-        toast.error("Please ensure all field copies have valid prices.");
-        return;
-      }
 
       let isValidForms = forms.some((form) => {
         return (

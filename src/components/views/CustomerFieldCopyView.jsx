@@ -716,13 +716,20 @@ Approved by: __________________  Date: ____________________`,
       maximumFractionDigits: 2,
     });
 
-  /** PDF currency — $ left, amount right; fixed width (not full column) for moderate gap. */
-  const renderCurrencyAmount = (n, { allowZero = false } = {}) => {
+  /**
+   * PDF table — $ sign + amount in a fixed-width box (space-between = gap).
+   * boxWidth override: TOTAL column always uses 5rem; PRICE uses default below.
+   */
+  const renderCurrencyAmount = (
+    n,
+    { allowZero = false, boxWidth: boxWidthOverride } = {}
+  ) => {
     const num = Number(n);
     if (!Number.isFinite(num)) return null;
     if (!allowZero && num <= 0) return null;
     const amount = formatMoney(num);
-    const boxWidth = amount.length > 9 ? "5rem" : "4rem";
+    const boxWidth =
+      boxWidthOverride ?? (amount.length > 9 ? "5rem" : "3rem");
     return (
       <span
         style={{
@@ -740,11 +747,38 @@ Approved by: __________________  Date: ____________________`,
     );
   };
 
-  const renderPdfMoneyCellContent = (n) => renderCurrencyAmount(n);
+  /** PRICE column PDF — same box width (3rem / 5rem); $ fixed, amount grows left → right. */
+  const renderPdfPriceCellContent = (n) => {
+    const num = Number(n);
+    if (!Number.isFinite(num)) return null;
+    if (num <= 0) return null;
+    const amount = formatMoney(num);
+    const boxWidth = amount.length > 9 ? "5rem" : "3rem";
+    return (
+      <span
+        style={{
+          display: "inline-flex",
+          justifyContent: "flex-start",
+          alignItems: "baseline",
+          gap: "1rem",
+          width: boxWidth,
+          minWidth: boxWidth,
+          whiteSpace: "nowrap",
+        }}
+      >
+        <span style={{ fontWeight: 700 }}>$</span>
+        <span>{amount}</span>
+      </span>
+    );
+  };
+
+  /** TOTAL column PDF — fixed 5rem box ($ ↔ amount gap wider than PRICE). */
+  const renderPdfTotalCellContent = (n) =>
+    renderCurrencyAmount(n, { boxWidth: "5rem" });
 
   const formatCurrencyDisplay = (n, alignRight = false) =>
     alignRight ? (
-      renderCurrencyAmount(n, { allowZero: true })
+      renderCurrencyAmount(n, { allowZero: true, boxWidth: "5rem" })
     ) : (
       <span style={{ whiteSpace: "nowrap" }}>{`$ ${formatMoney(n)}`}</span>
     );
@@ -891,6 +925,13 @@ Approved by: __________________  Date: ____________________`,
       paddingRight: "2px",
       verticalAlign: "top",
     };
+    const pdfPriceCellStyle = {
+      textAlign: "right",
+      whiteSpace: "nowrap",
+      paddingLeft: "0px",
+      paddingRight: "20px",
+      verticalAlign: "top",
+    };
 
     return (
       <>
@@ -909,13 +950,21 @@ Approved by: __________________  Date: ____________________`,
                 </td>
                 <td
                   className={isPdf ? "text-xs" : undefined}
-                  style={isPdf ? { textAlign: "center" } : undefined}
+                  style={
+                    isPdf
+                      ? { textAlign: "center", paddingLeft: "120px" }
+                      : undefined
+                  }
                 >
                   {row.size || ""}
                 </td>
                 <td
                   className={isPdf ? "text-xs" : undefined}
-                  style={isPdf ? { textAlign: "center" } : undefined}
+                  style={
+                    isPdf
+                      ? { textAlign: "center", paddingLeft: "100px" }
+                      : undefined
+                  }
                 >
                   {!hidePdfLaborFields && !hideLaborQty && d.qtyText
                     ? d.qtyText
@@ -938,9 +987,9 @@ Approved by: __________________  Date: ____________________`,
                 )}
                 {isPdf ? (
                   <>
-                    <td className="text-xs" style={pdfMoneyCellStyle} />
+                    <td className="text-xs" style={pdfPriceCellStyle} />
                     <td className="text-xs" style={pdfMoneyCellStyle}>
-                      {renderPdfMoneyCellContent(d.displayTotal)}
+                      {renderPdfTotalCellContent(d.displayTotal)}
                     </td>
                   </>
                 ) : (
@@ -975,13 +1024,17 @@ Approved by: __________________  Date: ____________________`,
               </td>
               <td
                 className={isPdf ? "text-xs" : undefined}
-                style={isPdf ? { textAlign: "center" } : undefined}
+                style={
+                  isPdf ? { textAlign: "center", paddingLeft: "120px" } : undefined
+                }
               >
                 {item?.size || ""}
               </td>
               <td
                 className={isPdf ? "text-xs" : undefined}
-                style={isPdf ? { textAlign: "center" } : undefined}
+                style={
+                  isPdf ? { textAlign: "center", paddingLeft: "100px" } : undefined
+                }
               >
                 {!hidePdfLaborFields &&
                   !hideLaborQty &&
@@ -1007,14 +1060,14 @@ Approved by: __________________  Date: ____________________`,
               )}
               <td
                 className={isPdf ? "text-xs" : undefined}
-                style={isPdf ? pdfMoneyCellStyle : undefined}
+                style={isPdf ? pdfPriceCellStyle : undefined}
               >
                 {!hidePdfLaborFields &&
                 d.displayPrice != null &&
                 !Number.isNaN(d.displayPrice) &&
                 d.displayPrice > 0
                   ? isPdf
-                    ? renderPdfMoneyCellContent(d.displayPrice)
+                    ? renderPdfPriceCellContent(d.displayPrice)
                     : formatMoney(d.displayPrice)
                   : ""}
               </td>
@@ -1024,7 +1077,7 @@ Approved by: __________________  Date: ____________________`,
               >
                 {d.totalVal > 0
                   ? isPdf
-                    ? renderPdfMoneyCellContent(d.totalVal)
+                    ? renderPdfTotalCellContent(d.totalVal)
                     : formatMoney(d.totalVal)
                   : ""}
               </td>
@@ -2106,25 +2159,41 @@ Approved by: __________________  Date: ____________________`,
                             <tr>
                               <th
                                 className="text-xs pb-1"
-                                style={{ textAlign: "left", verticalAlign: "bottom" }}
+                                style={{
+                                  textAlign: "left",
+                                  verticalAlign: "bottom",
+                                  paddingLeft: "150px",
+                                }}
                               >
                                 DESCRIPTION
                               </th>
                               <th
                                 className="text-xs pb-1"
-                                style={{ textAlign: "center", verticalAlign: "bottom" }}
+                                style={{
+                                  textAlign: "center",
+                                  verticalAlign: "bottom",
+                                  paddingLeft: "120px",
+                                }}
                               >
                                 SIZE
                               </th>
                               <th
                                 className="text-xs pb-1"
-                                style={{ textAlign: "center", verticalAlign: "bottom" }}
+                                style={{
+                                  textAlign: "center",
+                                  verticalAlign: "bottom",
+                                  paddingLeft: "80px",
+                                }}
                               >
                                 QUANTITY
                               </th>
                               <th
                                 className="text-xs pb-1"
-                                style={{ textAlign: "right", verticalAlign: "bottom" }}
+                                style={{
+                                  textAlign: "right",
+                                  verticalAlign: "bottom",
+                                  paddingRight: "35px",
+                                }}
                               >
                                 PRICE
                               </th>

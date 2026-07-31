@@ -769,18 +769,6 @@ export default function StaffAddBidForm() {
         return;
       }
 
-      let isValidPrice = forms.some((form) => {
-        return (
-          Number.parseFloat(form.price) * Number.parseFloat(form.quantity) !==
-            Number.parseFloat(form.totalPrice) && form.source === "F&G"
-        );
-      });
-
-      if (isValidPrice && type == 1) {
-        toast.error("Please ensure all field copies have valid prices.");
-        return;
-      }
-
       resultedForms = groupAndMergeForms(forms.map((f) => toPersistedCopy(f)), laborForms);
     }
 

@@ -918,17 +918,6 @@ export default function AddFieldCopyForm() {
     }
     // return;
     try {
-      let isValidPrice = forms.some((form) => {
-        return (
-          Number.parseFloat(form.price) * Number.parseFloat(form.quantity) !==
-          Number.parseFloat(form.totalPrice) && form.source === "F&G"
-        );
-      });
-
-      if (isValidPrice) {
-        toast.error("Please ensure all field copies have valid prices.");
-        return;
-      }
       if (forms.length === 0 && !isLabor) {
         toast.error("Please add some data.");
         return;
