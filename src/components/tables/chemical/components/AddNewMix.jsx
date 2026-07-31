@@ -130,8 +130,6 @@ const AddNewMix = () => {
     const trim = (v) => (v != null ? String(v).trim() : "");
     if (!trim(item.chemicalName)) return `Chemical ${num}: Please select Chemical Name`;
     if (!trim(item.quantity)) return `Chemical ${num}: Please enter Quantity (OZ / 100 GAL)`;
-    if (!trim(item.measure)) return `Chemical ${num}: Please enter Measure`;
-    if (!trim(item.brandName)) return `Chemical ${num}: Please enter Brand Name`;
     if (!trim(item.type)) return `Chemical ${num}: Please enter Type`;
     if (trim(item.cost) === "" && item.cost !== 0) return `Chemical ${num}: Please enter Cost`;
     if (trim(item.price) === "" && item.price !== 0) return `Chemical ${num}: Please enter Price`;
@@ -340,7 +338,7 @@ const AddNewMix = () => {
                 </div>
 
                 <div>
-                  <label>Measure *</label>
+                  <label>Measure</label>
                   <input
                     className="w-full border px-2 py-2"
                     value={item.measure}
@@ -351,7 +349,7 @@ const AddNewMix = () => {
                 </div>
 
                 <div>
-                  <label>Brand Name *</label>
+                  <label>Brand Name</label>
                   <input
                     className="w-full border px-2 py-2"
                     value={item.brandName}
@@ -385,6 +383,24 @@ const AddNewMix = () => {
                 </div>
 
                 <div>
+                  <label>COST / OZ *</label>
+                  <input
+                    readOnly
+                    className="w-full border px-2 py-2 bg-gray-100"
+                    value={item.costPerOz}
+                  />
+                </div>
+
+                <div>
+                  <label>PRICE / OZ *</label>
+                  <input
+                    readOnly
+                    className="w-full border px-2 py-2 bg-gray-100"
+                    value={item.pricePerOz}
+                  />
+                </div>
+
+                <div>
                   <label>Cost *</label>
                   <input
                     type="number"
@@ -405,24 +421,6 @@ const AddNewMix = () => {
                     onChange={(e) =>
                       handleChange(index, "price", e.target.value)
                     }
-                  />
-                </div>
-
-                <div>
-                  <label>COST / OZ *</label>
-                  <input
-                    readOnly
-                    className="w-full border px-2 py-2 bg-gray-100"
-                    value={item.costPerOz}
-                  />
-                </div>
-
-                <div>
-                  <label>PRICE / OZ * </label>
-                  <input
-                    readOnly
-                    className="w-full border px-2 py-2 bg-gray-100"
-                    value={item.pricePerOz}
                   />
                 </div>
               </div>

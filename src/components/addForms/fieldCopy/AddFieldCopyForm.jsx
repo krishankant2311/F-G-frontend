@@ -297,6 +297,27 @@ export default function AddFieldCopyForm() {
 
     if (name === "totalPrice" && isLaborOrLumpSum) {
       updatedForm.totalPrice = normalizeLaborLumpSumEditableAmount(value);
+
+      if (value === "" || value === null || value === undefined) {
+        updatedForm.cost = "";
+        updatedForm.totalCost = "";
+      } else {
+        const tp = parseFloat(updatedForm.totalPrice);
+        if (!Number.isNaN(tp) && tp >= 0) {
+          if (tp > 0) {
+            const markupPct = parseFloat(updatedForm.markUp ?? updatedForm.markup);
+            const useMarkup =
+              Number.isFinite(markupPct) && markupPct >= 0 ? markupPct : 100;
+            const derivedCost =
+              Math.round((tp / (1 + useMarkup / 100)) * 10000) / 10000;
+            updatedForm.cost = derivedCost;
+            updatedForm.totalCost = derivedCost;
+          } else {
+            updatedForm.cost = "";
+            updatedForm.totalCost = "";
+          }
+        }
+      }
     }
 
     // Auto-calc total price from cost + markup unless user is editing total price directly

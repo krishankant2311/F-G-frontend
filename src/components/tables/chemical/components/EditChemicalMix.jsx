@@ -326,6 +326,20 @@ const EditChemicalMix = ({ mix, onClose, onSuccess }) => {
               />
 
               <input
+                readOnly
+                className="border px-2 py-2 bg-gray-100"
+                placeholder="COST / OZ"
+                value={item.costPerOz}
+              />
+
+              <input
+                readOnly
+                className="border px-2 py-2 bg-gray-100"
+                placeholder="PRICE / OZ"
+                value={item.pricePerOz}
+              />
+
+              <input
                 type="number"
                 placeholder="Cost"
                 className="border px-2 py-2"
@@ -343,18 +357,6 @@ const EditChemicalMix = ({ mix, onClose, onSuccess }) => {
                 onChange={(e) =>
                   handleChange(index, "price", e.target.value)
                 }
-              />
-
-              <input
-                readOnly
-                className="border px-2 py-2 bg-gray-100"
-                value={`Cost / Oz : ${item.costPerOz}`}
-              />
-
-              <input
-                readOnly
-                className="border px-2 py-2 bg-gray-100"
-                value={`Price / Oz : ${item.pricePerOz}`}
               />
             </div>
 

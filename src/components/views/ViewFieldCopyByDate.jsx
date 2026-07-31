@@ -26,6 +26,53 @@ import {
   resolveFieldCopyDisplayJobType,
 } from "../../utils/fieldCopyLaborDisplay";
 
+/** Field Copy PDF download — DESCRIPTION without trailing vendor suffix (vendor has its own column). */
+function fieldCopyPdfDescriptionWithoutVendor(reference, vendorName) {
+  const ref = String(reference ?? "").trim();
+  if (!ref) return "";
+  const vendor = String(vendorName ?? "").trim();
+  if (vendor) {
+    const suffix = ` (${vendor})`;
+    if (ref.endsWith(suffix)) {
+      return ref.slice(0, -suffix.length).trim();
+    }
+  }
+  return ref;
+}
+
+/** Field Copy PDF — $ + amount (Office Copy pattern; html2pdf breaks inline-flex space-between). */
+function renderFieldCopyPdfMoneyBox(displayAmount) {
+  const amount = String(displayAmount ?? "").trim();
+  if (!amount) return null;
+  return (
+    <>
+      <b>$</b> {amount}
+    </>
+  );
+}
+
+function renderFieldCopyPdfTotalCell(n) {
+  const num = Number(n);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  return renderFieldCopyPdfMoneyBox(formatFieldCopyAmount(num));
+}
+
+function renderFieldCopyPdfSummaryMoney(n) {
+  const num = Number(n);
+  const safe = Number.isFinite(num) ? num : 0;
+  const amount = safe.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return renderFieldCopyPdfMoneyBox(amount);
+}
+
+function renderFieldCopyPdfFormattedMoney(n) {
+  const num = Number(n);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  return renderFieldCopyPdfMoneyBox(formatFieldCopyAmount(num));
+}
+
 export default function ViewFieldCopyByDate() {
   const { tableSize } = useTableContext();
   const location = useLocation();
@@ -323,7 +370,8 @@ export default function ViewFieldCopyByDate() {
   ]);
 
   const workSummaryGridClass =
-    "grid grid-cols-[minmax(280px,36%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)] gap-x-2 gap-y-1";
+    "grid grid-cols-[minmax(325px,36%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)_minmax(0,10.666%)] gap-x-0 gap-y-1";
+  const workSummaryGridClassPdf = workSummaryGridClass;
 
   const crewLaborTaxLabel = (labor) =>
     formData?.customerType === "Normal"
@@ -1423,7 +1471,7 @@ const handleInvoiceJobType = (jobType) => {
     return "";
   } else if (type === "reimbursement total") {
     return "";
-  } else if (String(jobType || "").includes("Lump Sum")) {
+  } else if (type.includes("lump sum")) {
     return "";
   } else {
     return "MATERIAL";
@@ -1955,7 +2003,10 @@ const handleInvoiceJobType = (jobType) => {
                                         ? fieldCopyEntryLineItems
                                         : fieldCopies,
                                     })?.toUpperCase()
-                                  : item?.reference?.toUpperCase()}
+                                  : fieldCopyPdfDescriptionWithoutVendor(
+                                      item?.reference,
+                                      item?.vendorName
+                                    ).toUpperCase()}
                               </td>
                               <td className="text-xs">
                                 {item?.vendorName?.toUpperCase()}
@@ -1983,13 +2034,7 @@ const handleInvoiceJobType = (jobType) => {
                                   : ""}
                               </td>
                               <td className="text-xs text-end">
-                                <b>$</b>
-                                <span className="w-[80px] inline-block">
-                                  {" "}
-                                  {displayTotal > 0
-                                    ? formatFieldCopyAmount(displayTotal)
-                                    : ""}
-                                </span>
+                                {renderFieldCopyPdfTotalCell(displayTotal)}
                               </td>
                             </tr>
                           );
@@ -2041,13 +2086,7 @@ const handleInvoiceJobType = (jobType) => {
                                     : ""}
                                 </td>
                                 <td className="text-xs text-end">
-                                  <b>$</b>
-                                  <span className="w-[80px] inline-block">
-                                    {" "}
-                                    {row.displayTotal > 0
-                                      ? formatFieldCopyAmount(row.displayTotal)
-                                      : ""}
-                                  </span>
+                                  {renderFieldCopyPdfTotalCell(row.displayTotal)}
                                 </td>
                               </tr>
                             );
@@ -2169,23 +2208,14 @@ const handleInvoiceJobType = (jobType) => {
                       </b>
                     </span>
                     <span className="text-end tabular-nums whitespace-nowrap">
-                      {rowCost > 0 ? (
-                        <>
-                          <b>$</b>{" "}
-                          {formatFieldCopyAmount(rowCost)}
-                        </>
-                      ) : (
-                        ""
-                      )}
+                      {rowCost > 0
+                        ? renderFieldCopyPdfFormattedMoney(rowCost)
+                        : ""}
                     </span>
                     <span className="min-w-0" aria-hidden />
                     <span className="min-w-0" aria-hidden />
                     <span className="text-end tabular-nums whitespace-nowrap">
-                      <b>$</b>{" "}
-                      {item.totalPrice?.toLocaleString("en-US", {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}
+                      {renderFieldCopyPdfSummaryMoney(item.totalPrice)}
                     </span>
                   </div>
                 );
@@ -2200,21 +2230,14 @@ const handleInvoiceJobType = (jobType) => {
                     <b>{crewLaborTaxLabel(labor)}</b>
                   </span>
                   <span className="text-end tabular-nums whitespace-nowrap">
-                    {row.lineCost > 0 ? (
-                      <>
-                        <b>$</b> {formatFieldCopyAmount(row.lineCost)}
-                      </>
-                    ) : (
-                      ""
-                    )}
+                    {row.lineCost > 0
+                      ? renderFieldCopyPdfFormattedMoney(row.lineCost)
+                      : ""}
                   </span>
                   <span className="min-w-0" aria-hidden />
                   <span className="min-w-0" aria-hidden />
                   <span className="text-end tabular-nums whitespace-nowrap">
-                    <b>$</b>{" "}
-                    {row.displayTotal > 0
-                      ? formatFieldCopyAmount(row.displayTotal)
-                      : ""}
+                    {renderFieldCopyPdfTotalCell(row.displayTotal)}
                   </span>
                 </div>
               ))}
@@ -2257,14 +2280,7 @@ const handleInvoiceJobType = (jobType) => {
                         )}
                       </span>
                       <span>
-                        <b>$</b>{" "}
-                        <span className="inline-block w-[80px] text-end">
-                          {" "}
-                          {formData.taxCredits?.toLocaleString("en-US", {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </span>
+                        {renderFieldCopyPdfSummaryMoney(formData.taxCredits)}
                       </span>
                     </div>
                     <div className="flex justify-between my-2">
@@ -2281,14 +2297,7 @@ const handleInvoiceJobType = (jobType) => {
                         )}
                       </span>
                       <span>
-                        <b>$</b>{" "}
-                        <span className="inline-block w-[80px] text-end">
-                          {" "}
-                          {formData.nonTaxCredits?.toLocaleString("en-US", {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </span>
+                        {renderFieldCopyPdfSummaryMoney(formData.nonTaxCredits)}
                       </span>
                     </div>
                   </>
@@ -2304,13 +2313,8 @@ const handleInvoiceJobType = (jobType) => {
                     <span className="min-w-0" aria-hidden />
                     <span className="min-w-0" aria-hidden />
                     <span className="text-end tabular-nums whitespace-nowrap">
-                      <b>$</b>{" "}
-                      {fieldCopyPdfWorkSummaryTotals.costSubtotal.toLocaleString(
-                        "en-US",
-                        {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        }
+                      {renderFieldCopyPdfSummaryMoney(
+                        fieldCopyPdfWorkSummaryTotals.costSubtotal
                       )}
                     </span>
                   </div>
@@ -2320,20 +2324,12 @@ const handleInvoiceJobType = (jobType) => {
                 >
                   <span className="col-span-3 min-w-0">SUBTOTAL</span>
                   <span className="text-end tabular-nums whitespace-nowrap">
-                    <b>$</b>{" "}
-                    {pdfCostNetSubtotal.toLocaleString("en-US", {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}
+                    {renderFieldCopyPdfSummaryMoney(pdfCostNetSubtotal)}
                   </span>
                   <span className="min-w-0" aria-hidden />
                   <span className="min-w-0" aria-hidden />
                   <span className="text-end tabular-nums whitespace-nowrap">
-                    <b>$</b>{" "}
-                    {pdfSubtotalSell.toLocaleString("en-US", {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}
+                    {renderFieldCopyPdfSummaryMoney(pdfSubtotalSell)}
                   </span>
                 </div>
                 {/* <hr />
@@ -2375,20 +2371,12 @@ const handleInvoiceJobType = (jobType) => {
                 >
                   <span className="col-span-3 min-w-0">TAXABLE AMOUNT</span>
                   <span className="text-end tabular-nums whitespace-nowrap">
-                    <b>$</b>{" "}
-                    {pdfTaxableAmountDisplay.cost.toLocaleString("en-US", {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}
+                    {renderFieldCopyPdfSummaryMoney(pdfTaxableAmountDisplay.cost)}
                   </span>
                   <span className="min-w-0" aria-hidden />
                   <span className="min-w-0" aria-hidden />
                   <span className="text-end tabular-nums whitespace-nowrap">
-                    <b>$</b>{" "}
-                    {pdfTaxableAmountDisplay.sell.toLocaleString("en-US", {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}
+                    {renderFieldCopyPdfSummaryMoney(pdfTaxableAmountDisplay.sell)}
                   </span>
                 </div>
                 <hr />
@@ -2397,20 +2385,12 @@ const handleInvoiceJobType = (jobType) => {
                 >
                   <span className="col-span-3 min-w-0">SALES TAX</span>
                   <span className="text-end tabular-nums whitespace-nowrap">
-                    <b>$</b>{" "}
-                    {pdfSalesTaxOnCost.toLocaleString("en-US", {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}
+                    {renderFieldCopyPdfSummaryMoney(pdfSalesTaxOnCost)}
                   </span>
                   <span className="min-w-0" aria-hidden />
                   <span className="min-w-0" aria-hidden />
                   <span className="text-end tabular-nums whitespace-nowrap">
-                    <b>$</b>{" "}
-                    {pdfSalesTax.toLocaleString("en-US", {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}
+                    {renderFieldCopyPdfSummaryMoney(pdfSalesTax)}
                   </span>
                 </div>
                 <hr />
@@ -2419,26 +2399,14 @@ const handleInvoiceJobType = (jobType) => {
                 >
                   <span className="col-span-3 min-w-0">GRAND TOTAL</span>
                   <span className="text-end tabular-nums whitespace-nowrap">
-                    {pdfCostGrandTotal > 0 ? (
-                      <>
-                        <b>$</b>{" "}
-                        {pdfCostGrandTotal.toLocaleString("en-US", {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}
-                      </>
-                    ) : (
-                      ""
-                    )}
+                    {pdfCostGrandTotal > 0
+                      ? renderFieldCopyPdfSummaryMoney(pdfCostGrandTotal)
+                      : ""}
                   </span>
                   <span className="min-w-0" aria-hidden />
                   <span className="min-w-0" aria-hidden />
                   <span className="text-end tabular-nums whitespace-nowrap border-b border-black pb-[7px]">
-                    <b>$</b>{" "}
-                    {pdfGrandTotal.toLocaleString("en-US", {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}
+                    {renderFieldCopyPdfSummaryMoney(pdfGrandTotal)}
                   </span>
                 </div>
               </div>

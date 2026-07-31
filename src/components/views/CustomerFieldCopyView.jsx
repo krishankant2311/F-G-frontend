@@ -917,6 +917,82 @@ Approved by: __________________  Date: ____________________`,
     findLaborRateForJobType,
   ]);
 
+  /** Customer Copy view + PDF — Lump Sum: DB reference, strip vendor suffix only when appended at end. */
+  const getCustomerCopyPdfLumpSumTableDescription = useCallback(
+    (item) => {
+      const stripVendorSuffixOnly = (storedReference, vendorName) => {
+        const ref = String(storedReference ?? "").trim();
+        if (!ref) return "";
+        const vendor = String(vendorName ?? "").trim();
+        if (vendor) {
+          const suffix = ` (${vendor})`;
+          if (ref.endsWith(suffix)) {
+            return ref.slice(0, -suffix.length).trim();
+          }
+        }
+        return ref;
+      };
+
+      const sell = Number(item?.totalPrice) || 0;
+      const typeKey = String(item?.type || item?.jobType || "")
+        .trim()
+        .toUpperCase();
+      const taxable = !!item?.isTaxable;
+
+      const lineMatches = (fc) => {
+        if (!isLumpSumFieldCopySource(fc?.source)) return false;
+        const fcType = String(fc?.type || fc?.jobType || "")
+          .trim()
+          .toUpperCase();
+        if (typeKey && fcType !== typeKey) return false;
+        if (!!fc?.isTaxable !== taxable) return false;
+        if (sell > 0 && Math.abs(Number(fc?.totalPrice) - sell) > 0.02) {
+          return false;
+        }
+        return true;
+      };
+
+      const candidates = [];
+      const collectFrom = (list) => {
+        for (const fc of list || []) {
+          if (!lineMatches(fc)) continue;
+          const ref = String(fc?.reference || fc?.referenceBase || "").trim();
+          if (!ref) continue;
+          candidates.push(
+            stripVendorSuffixOnly(ref, fc?.vendorName || fc?.vendor)
+          );
+        }
+      };
+
+      collectFrom(buildCustomerCopyDisplayFieldCopies(fieldCopies));
+
+      const wantDate = String(entryDate || "").trim();
+      for (const entry of formData?.officeFieldCopy || []) {
+        if (wantDate && String(entry?.entryDate || "").trim() !== wantDate) {
+          continue;
+        }
+        collectFrom(entry?.fieldCopies);
+      }
+
+      if (candidates.length > 0) {
+        const best = candidates.reduce((a, b) => (a.length >= b.length ? a : b));
+        return best.toUpperCase();
+      }
+
+      const ref = String(item?.reference || item?.referenceBase || "").trim();
+      if (ref) {
+        return stripVendorSuffixOnly(ref, item?.vendorName).toUpperCase();
+      }
+      return getCustomerCopyDisplayDescription(item);
+    },
+    [
+      fieldCopies,
+      buildCustomerCopyDisplayFieldCopies,
+      entryDate,
+      formData?.officeFieldCopy,
+    ]
+  );
+
   const renderCustomerCopyTableBody = (variant = "view") => {
     const isPdf = variant === "pdf";
     const pdfMoneyCellStyle = {
@@ -1020,7 +1096,9 @@ Approved by: __________________  Date: ____________________`,
                 className={isPdf ? "text-xs w-[400px] pr-2" : "w-[400px] pr-2"}
                 style={isPdf ? { textAlign: "left" } : undefined}
               >
-                {getCustomerCopyDisplayDescription(item)}
+                {isLumpSumFieldCopySource(item?.source)
+                  ? getCustomerCopyPdfLumpSumTableDescription(item)
+                  : getCustomerCopyDisplayDescription(item)}
               </td>
               <td
                 className={isPdf ? "text-xs" : undefined}
@@ -1109,14 +1187,11 @@ Approved by: __________________  Date: ____________________`,
                   <>{sourceLaborLabel.toUpperCase()}</>
                 ) : item.source === "Labor" ? (
                   <>{item.jobType?.toUpperCase()} LABOR</>
-                ) : isLumpSumFieldCopySource(item.source) && item.reference ? (
+                ) : isLumpSumFieldCopySource(item.source) ? (
                   <>
-                    {materialNameBaseForEdit(
-                      String(item.reference),
-                      item.vendorName
-                    )
+                    {String(item.type || item.jobType || "Lump Sum")
                       .trim()
-                      .toUpperCase() || String(item.reference).toUpperCase()}
+                      .toUpperCase()}
                   </>
                 ) : item.jobType?.toLowerCase() === "equipment fees" ? (
                   "EQUIPMENT LUMP SUM"
@@ -1227,6 +1302,7 @@ Approved by: __________________  Date: ____________________`,
         result[key] = {
           category,
           jobType: item.jobType,
+          type: item.type || item.jobType,
           reference: isLumpSum ? lumpSumBaseRef : reference,
           totalPrice: 0,
           isTaxable: item.isTaxable,
@@ -1317,6 +1393,7 @@ Approved by: __________________  Date: ____________________`,
           .toLowerCase() === "yes";
       return {
         jobType,
+        type: row?.type || jobType,
         reference: row?.reference,
         source: row?.source,
         isTaxable: isSourceLabor ? lineTaxable : row?.isTaxable,
