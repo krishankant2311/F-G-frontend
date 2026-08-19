@@ -57,9 +57,7 @@ export default function CustomerSalesOrderPreviewModal({
     event.stopPropagation();
   };
 
-  const activeJobTypes = jobTypes.filter(
-    (item) => item.status === "Active" || item.status === "Delete"
-  );
+  const activeJobTypes = jobTypes.filter((item) => item.status === "Active");
 
   return (
     <div
@@ -123,9 +121,6 @@ export default function CustomerSalesOrderPreviewModal({
                           <option
                             key={item._id || item.jobName}
                             value={item.jobName}
-                            className={
-                              item.status === "Delete" ? "text-red-600" : "text-black"
-                            }
                           >
                             {item.jobName}
                           </option>
@@ -204,10 +199,10 @@ export default function CustomerSalesOrderPreviewModal({
                       {row.source === "Other" ? "Mark up" : "Markup *"}
                     </label>
                     <input
-                      type="number"
-                      min="0"
-                      step="0.01"
+                      type="text"
+                      inputMode="decimal"
                       className={fieldClass}
+                      placeholder="Enter markUp"
                       value={row.markup ?? row.markUp ?? ""}
                       onChange={(e) =>
                         handlePreviewFieldChange(index, "markup", e.target.value)

@@ -307,12 +307,13 @@ import "react-toastify/dist/ReactToastify.css";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useTableContext } from "../../../context/TableContext";
 import JoditEditor from "jodit-react";
+import { applyMaterialFormPricing, DEFAULT_MATERIAL_MARKUP } from "../../../utils/materialPricingDisplay";
 export default function EditMaterialForm() {
   const [formData, setFormData] = useState({
     name: "",
     description: "",
     cost: "",
-    markUp: "",
+    markUp: "100",
     measure: "",
     price: "",
     status: "",
@@ -349,15 +350,20 @@ export default function EditMaterialForm() {
     }
     if (e.target.name === "price") {
       const val = e.target.value;
-      if (val < 0) {
+      if (val !== "" && parseFloat(val) < 0) {
         toast.error("Price cannot be negative.");
         return;
       }
     }
-    setFormData({
+    const name = e.target.name;
+    let next = {
       ...formData,
-      [e.target.name]: e.target.value,
-    });
+      [name]: e.target.value,
+    };
+    if (name === "cost" || name === "markUp" || name === "price") {
+      next = applyMaterialFormPricing(next, name);
+    }
+    setFormData(next);
   };
   function containsNumberOrSpecialChar(text) {
     // Regular expression to check for numbers (0-9) or special characters
@@ -380,7 +386,16 @@ export default function EditMaterialForm() {
         { headers: headers }
       );
       if (response.data.statusCode === 200) {
-        setFormData(response.data.result);
+        const material = response.data.result || {};
+        const markupVal =
+          material.markUp ?? material.markup ?? DEFAULT_MATERIAL_MARKUP;
+        setFormData({
+          ...material,
+          markUp:
+            markupVal !== null && String(markupVal).trim() !== ""
+              ? String(markupVal)
+              : DEFAULT_MATERIAL_MARKUP,
+        });
       } else {
         toast.error(response.data.message);
       }

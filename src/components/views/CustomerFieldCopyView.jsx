@@ -32,6 +32,67 @@ import {
   resolveOfficeFieldCopyGroupJobType,
 } from "../../utils/fieldCopyLaborDisplay";
 
+/** Customer Copy Materials table — crew rows use sell total, not internal office cost. */
+function customerCopyCrewTableCalc(crewFields) {
+  const displayTotal = Number(crewFields?.displayTotal) || 0;
+  const qtyText = crewFields?.qtyText ?? "";
+  const qty = parseFloat(qtyText) || 0;
+
+  if (!(displayTotal > 0)) {
+    return {
+      lineCost: crewFields?.lineCost,
+      displayPrice: crewFields?.displayPrice,
+      markupVal: crewFields?.markupVal,
+      displayTotal,
+      qtyText,
+    };
+  }
+
+  const lineCost = Math.round((displayTotal / 2) * 100) / 100;
+  const displayPrice =
+    qty > 0
+      ? Math.round((displayTotal / qty) * 100) / 100
+      : crewFields?.displayPrice;
+
+  return {
+    lineCost,
+    displayPrice,
+    markupVal: 100,
+    displayTotal,
+    qtyText,
+  };
+}
+
+/** Penny-rounded sell totals show ~99.99% when markup is 100% (sell ≈ 2× cost). */
+function snapCustomerCopyMarkupPercent(markupVal, lineCost, displayTotal) {
+  const stored = Number(markupVal);
+  if (Number.isFinite(stored) && Math.abs(stored - 100) < 0.06) return 100;
+
+  const lc = Number(lineCost) || 0;
+  const dt = Number(displayTotal) || 0;
+  if (lc > 0 && dt > 0) {
+    const implied = Math.round(((dt / lc - 1) * 100) * 100) / 100;
+    if (Math.abs(dt - lc * 2) <= 0.02 || (implied >= 99.95 && implied <= 100.05)) {
+      return 100;
+    }
+    return implied;
+  }
+  const m = Number(markupVal);
+  if (Number.isFinite(m) && m >= 99.95 && m <= 100.05) return 100;
+  return markupVal;
+}
+
+function formatCustomerCopyMarkupCell(markupVal, lineCost, displayTotal) {
+  const snapped = snapCustomerCopyMarkupPercent(markupVal, lineCost, displayTotal);
+  if (snapped === null || snapped === undefined || snapped === "") return "";
+  return (
+    Number(snapped).toLocaleString("en-US", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    }) + "%"
+  );
+}
+
 export default function CustomerFieldCopyView() {
   const [formData, setFormData] = useState({
     customerName: "",
@@ -78,7 +139,7 @@ export default function CustomerFieldCopyView() {
   const [materialLaborData, setMaterialLaborData] = useState([]);
 
   const location = useLocation();
-  const data = location.state.data;
+  const data = location.state?.data ?? null;
 
   const { id, entryDate, index } = useParams();
 
@@ -449,10 +510,10 @@ Approved by: __________________  Date: ____________________`,
     const completedDate = formData?.projectCompletedDate
       ? convertMillisecondsToDate(formData?.projectCompletedDate)
       : "";
-    const salesOrderNumber = data.uniqueId;
+    const salesOrderNumber = data?.uniqueId ?? "";
     const projectCode = formData?.projectCode;
 
-    if (doc_name.includes(" ")) {
+    if (doc_name) {
       doc_name = (
         formData?.customerName?.toUpperCase() +
         (completedDate ? "-" : "") +
@@ -657,7 +718,47 @@ Approved by: __________________  Date: ____________________`,
     });
   };
 
+  const getCustomerCopySourceLaborDisplayFields = (item) => {
+    const storedTotal = Number(item?.totalPrice) || 0;
+    let lineCost = Number(item?.totalCost) || 0;
+    if (!(lineCost > 0) && storedTotal > 0) {
+      const markupPct = parseFloat(item?.markup ?? item?.markUp);
+      const m = Number.isFinite(markupPct) && markupPct > 0 ? markupPct : 100;
+      lineCost = Math.round((storedTotal / (1 + m / 100)) * 100) / 100;
+    }
+    const displayTotal =
+      storedTotal > 0
+        ? storedTotal
+        : lineCost > 0
+          ? Math.round(lineCost * 2 * 100) / 100
+          : 0;
+    const markupVal = item?.markup ?? item?.markUp ?? null;
+    return {
+      lineCost,
+      displayTotal,
+      displayPrice: displayTotal > 0 ? displayTotal : null,
+      markupVal,
+      qtyText: "",
+    };
+  };
+
   const getPdfItemDisplayFields = (item) => {
+    if (String(item?.source || "") === "Labor") {
+      const laborDisplay = getCustomerCopySourceLaborDisplayFields(item);
+      return {
+        qty: 0,
+        qtyDisplay: "",
+        unitCostVal: laborDisplay.lineCost,
+        displayPrice: laborDisplay.displayPrice,
+        markupVal: snapCustomerCopyMarkupPercent(
+          laborDisplay.markupVal,
+          laborDisplay.lineCost,
+          laborDisplay.displayTotal
+        ),
+        totalVal: laborDisplay.displayTotal,
+      };
+    }
+
     const {
       lineCost,
       displayPrice,
@@ -705,7 +806,7 @@ Approved by: __________________  Date: ____________________`,
       qtyDisplay,
       unitCostVal: lineCost,
       displayPrice,
-      markupVal,
+      markupVal: snapCustomerCopyMarkupPercent(markupVal, lineCost, displayTotal),
       totalVal: displayTotal,
     };
   };
@@ -715,6 +816,27 @@ Approved by: __________________  Date: ____________________`,
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     });
+
+  /** PDF $ — crisp render in html2pdf (avoid heavy faux-bold blur). */
+  const pdfCurrencyDollarStyle = {
+    display: "inline-block",
+    fontWeight: 600,
+    color: "#000000",
+    lineHeight: 1,
+    WebkitFontSmoothing: "antialiased",
+    MozOsxFontSmoothing: "grayscale",
+    textRendering: "optimizeLegibility",
+  };
+
+  const pdfCurrencyAmountStyle = {
+    display: "inline-block",
+    fontVariantNumeric: "tabular-nums",
+    color: "#000000",
+    lineHeight: 1,
+    WebkitFontSmoothing: "antialiased",
+    MozOsxFontSmoothing: "grayscale",
+    textRendering: "optimizeLegibility",
+  };
 
   /**
    * PDF table — $ sign + amount in a fixed-width box (space-between = gap).
@@ -741,8 +863,8 @@ Approved by: __________________  Date: ____________________`,
           whiteSpace: "nowrap",
         }}
       >
-        <span style={{ fontWeight: 700 }}>$</span>
-        <span>{amount}</span>
+        <span style={pdfCurrencyDollarStyle}>$</span>
+        <span style={pdfCurrencyAmountStyle}>{amount}</span>
       </span>
     );
   };
@@ -766,19 +888,19 @@ Approved by: __________________  Date: ____________________`,
           whiteSpace: "nowrap",
         }}
       >
-        <span style={{ fontWeight: 700 }}>$</span>
-        <span>{amount}</span>
+        <span style={pdfCurrencyDollarStyle}>$</span>
+        <span style={pdfCurrencyAmountStyle}>{amount}</span>
       </span>
     );
   };
 
-  /** TOTAL column PDF — fixed 5rem box ($ ↔ amount gap wider than PRICE). */
+  /** TOTAL column PDF — 4rem box ($ ↔ amount gap slightly tighter than before). */
   const renderPdfTotalCellContent = (n) =>
-    renderCurrencyAmount(n, { boxWidth: "5rem" });
+    renderCurrencyAmount(n, { boxWidth: "4rem" });
 
   const formatCurrencyDisplay = (n, alignRight = false) =>
     alignRight ? (
-      renderCurrencyAmount(n, { allowZero: true, boxWidth: "5rem" })
+      renderCurrencyAmount(n, { allowZero: true, boxWidth: "4rem" })
     ) : (
       <span style={{ whiteSpace: "nowrap" }}>{`$ ${formatMoney(n)}`}</span>
     );
@@ -826,13 +948,10 @@ Approved by: __________________  Date: ____________________`,
 
     const entryCalc = (entry) => {
       if (entry.kind === "crew") {
-        return {
-          lineCost: entry.crewFields.lineCost,
-          displayPrice: entry.crewFields.displayPrice,
-          markupVal: entry.crewFields.markupVal,
-          displayTotal: entry.crewFields.displayTotal,
-          qtyText: entry.crewFields.qtyText,
-        };
+        return customerCopyCrewTableCalc(entry.crewFields);
+      }
+      if (String(entry.item?.source || "") === "Labor") {
+        return getCustomerCopySourceLaborDisplayFields(entry.item);
       }
       return getOfficeFieldCopyRowCalculations(entry.item);
     };
@@ -879,7 +998,7 @@ Approved by: __________________  Date: ____________________`,
       const lc = Number(g.calc.lineCost) || 0;
       const dt = Number(g.calc.displayTotal) || 0;
       if (lc > 0 && dt > 0) {
-        g.calc.markupVal = Math.round(((dt / lc - 1) * 100) * 100) / 100;
+        g.calc.markupVal = snapCustomerCopyMarkupPercent(g.calc.markupVal, lc, dt);
       }
       if (g.qtySum > 0) {
         g.calc.qtyText = Number.isInteger(g.qtySum)
@@ -1005,7 +1124,25 @@ Approved by: __________________  Date: ____________________`,
       textAlign: "right",
       whiteSpace: "nowrap",
       paddingLeft: "0px",
-      paddingRight: "20px",
+      paddingRight: "16px",
+      verticalAlign: "top",
+    };
+    const pdfDescCellStyle = {
+      textAlign: "left",
+      verticalAlign: "top",
+      lineHeight: "1.35",
+      whiteSpace: "normal",
+      wordWrap: "break-word",
+      overflowWrap: "break-word",
+      letterSpacing: "normal",
+      paddingTop: "2px",
+      paddingBottom: "2px",
+    };
+    const pdfSizeCellStyle = {
+      textAlign: "center",
+      paddingLeft: "100px",
+      paddingRight: "6px",
+      whiteSpace: "nowrap",
       verticalAlign: "top",
     };
 
@@ -1019,18 +1156,14 @@ Approved by: __________________  Date: ____________________`,
             return (
               <tr key={`${variant}-merged-labor-${idx}`}>
                 <td
-                  className={isPdf ? "text-xs w-[400px] pr-2" : "w-[400px] pr-2"}
-                  style={isPdf ? { textAlign: "left" } : undefined}
+                  className={isPdf ? "text-xs pr-2" : "w-[400px] pr-2"}
+                  style={isPdf ? pdfDescCellStyle : undefined}
                 >
                   {isPdf ? row.description : <p className="m-0">{row.description}</p>}
                 </td>
                 <td
                   className={isPdf ? "text-xs" : undefined}
-                  style={
-                    isPdf
-                      ? { textAlign: "center", paddingLeft: "120px" }
-                      : undefined
-                  }
+                  style={isPdf ? pdfSizeCellStyle : undefined}
                 >
                   {row.size || ""}
                 </td>
@@ -1051,14 +1184,11 @@ Approved by: __________________  Date: ____________________`,
                 )}
                 {!isPdf && (
                   <td>
-                    {d.markupVal !== null &&
-                    d.markupVal !== undefined &&
-                    d.markupVal !== ""
-                      ? Number(d.markupVal).toLocaleString("en-US", {
-                          minimumFractionDigits: 0,
-                          maximumFractionDigits: 2,
-                        }) + "%"
-                      : ""}
+                    {formatCustomerCopyMarkupCell(
+                      d.markupVal,
+                      d.lineCost,
+                      d.displayTotal
+                    )}
                   </td>
                 )}
                 {isPdf ? (
@@ -1090,11 +1220,13 @@ Approved by: __________________  Date: ____________________`,
           const hideLumpSumQty = shouldHideCustomerCopyLumpSumQuantity(item);
           const hidePdfLaborFields =
             isPdf && String(item?.source || "").toLowerCase() === "labor";
+          const hidePdfLumpSumPrice =
+            isPdf && isLumpSumFieldCopySource(item?.source);
           return (
             <tr key={`${variant}-item-${idx}`}>
               <td
-                className={isPdf ? "text-xs w-[400px] pr-2" : "w-[400px] pr-2"}
-                style={isPdf ? { textAlign: "left" } : undefined}
+                className={isPdf ? "text-xs pr-2" : "w-[400px] pr-2"}
+                style={isPdf ? pdfDescCellStyle : undefined}
               >
                 {isLumpSumFieldCopySource(item?.source)
                   ? getCustomerCopyPdfLumpSumTableDescription(item)
@@ -1102,9 +1234,7 @@ Approved by: __________________  Date: ____________________`,
               </td>
               <td
                 className={isPdf ? "text-xs" : undefined}
-                style={
-                  isPdf ? { textAlign: "center", paddingLeft: "120px" } : undefined
-                }
+                style={isPdf ? pdfSizeCellStyle : undefined}
               >
                 {item?.size || ""}
               </td>
@@ -1126,14 +1256,11 @@ Approved by: __________________  Date: ____________________`,
               )}
               {!isPdf && (
                 <td>
-                  {d.markupVal !== null &&
-                  d.markupVal !== undefined &&
-                  d.markupVal !== ""
-                    ? Number(d.markupVal).toLocaleString("en-US", {
-                        minimumFractionDigits: 0,
-                        maximumFractionDigits: 2,
-                      }) + "%"
-                    : ""}
+                  {formatCustomerCopyMarkupCell(
+                    d.markupVal,
+                    d.unitCostVal,
+                    d.totalVal
+                  )}
                 </td>
               )}
               <td
@@ -1141,6 +1268,7 @@ Approved by: __________________  Date: ____________________`,
                 style={isPdf ? pdfPriceCellStyle : undefined}
               >
                 {!hidePdfLaborFields &&
+                !hidePdfLumpSumPrice &&
                 d.displayPrice != null &&
                 !Number.isNaN(d.displayPrice) &&
                 d.displayPrice > 0
@@ -1378,13 +1506,15 @@ Approved by: __________________  Date: ____________________`,
     };
 
     const materialSeeds = tableItems.map((row) => {
-      const { displayTotal } = getOfficeFieldCopyRowCalculations(row);
+      const isSourceLabor = String(row?.source || "") === "Labor";
+      const { displayTotal } = isSourceLabor
+        ? getCustomerCopySourceLaborDisplayFields(row)
+        : getOfficeFieldCopyRowCalculations(row);
       const sell =
         Number(displayTotal) > 0
           ? displayTotal
           : Number(row?.totalPrice) || 0;
       const jobType = jobTypeForCustomerCopyTableRow(row);
-      const isSourceLabor = String(row?.source || "") === "Labor";
       const lineTaxable =
         row?.isTaxable === true ||
         row?.isTaxable === "true" ||
@@ -1686,20 +1816,33 @@ Approved by: __________________  Date: ____________________`,
             reference: item.reference,
             vendorName: item.vendorName || item.vendor || "",
             size: item.measure,
-            quantity: 0,
-            price: item.price,
+            quantity: 1,
+            price: 0,
             cost: 0,
+            totalCost: 0,
             markup: 0,
             markUp: 0,
             totalPrice: 0,
           };
         }
-        const qty = item.quantity || 1;
-        summary[key].quantity += qty;
-        summary[key].totalPrice += item.totalPrice || 0;
+        const lineQty = num(item.quantity) > 0 ? num(item.quantity) : 1;
+        summary[key].totalPrice += num(item.totalPrice);
         summary[key].isTaxable = summary[key].isTaxable || item.isTaxable;
-        if (item.cost) {
-          summary[key].cost += Number(item.cost) * qty;
+        const unitCost = num(item.cost);
+        if (unitCost > 0) {
+          summary[key].totalCost =
+            (Number(summary[key].totalCost) || 0) + unitCost * lineQty;
+        } else {
+          const sell = num(item.totalPrice);
+          if (sell > 0) {
+            const m =
+              num(item.markUp ?? item.markup) > 0
+                ? num(item.markUp ?? item.markup)
+                : 100;
+            summary[key].totalCost =
+              (Number(summary[key].totalCost) || 0) +
+              Math.round((sell / (1 + m / 100)) * 100) / 100;
+          }
         }
         if (
           (summary[key].markup === 0 || summary[key].markup === undefined) &&
@@ -2179,7 +2322,7 @@ Approved by: __________________  Date: ____________________`,
                       </pre>
                     </div>
                     <div className="p-0">
-                      <p className="text-xs break-words">{data.uniqueId}</p>
+                      <p className="text-xs break-words">{data?.uniqueId ?? ""}</p>
                     </div>
                     <div className="p-0">
                       {/* <h6 className="font-bold text-[15px]">Project Code</h6> */}
@@ -2226,8 +2369,8 @@ Approved by: __________________  Date: ____________________`,
                           style={{ tableLayout: "fixed", width: "100%" }}
                         >
                           <colgroup>
-                            <col style={{ width: "40%" }} />
-                            <col style={{ width: "12%" }} />
+                            <col style={{ width: "38%" }} />
+                            <col style={{ width: "14%" }} />
                             <col style={{ width: "12%" }} />
                             <col style={{ width: "18%" }} />
                             <col style={{ width: "18%" }} />
@@ -2239,7 +2382,6 @@ Approved by: __________________  Date: ____________________`,
                                 style={{
                                   textAlign: "left",
                                   verticalAlign: "bottom",
-                                  paddingLeft: "150px",
                                 }}
                               >
                                 DESCRIPTION
@@ -2249,7 +2391,9 @@ Approved by: __________________  Date: ____________________`,
                                 style={{
                                   textAlign: "center",
                                   verticalAlign: "bottom",
-                                  paddingLeft: "120px",
+                                  paddingLeft: "100px",
+                                  paddingRight: "6px",
+                                  whiteSpace: "nowrap",
                                 }}
                               >
                                 SIZE
@@ -2269,7 +2413,7 @@ Approved by: __________________  Date: ____________________`,
                                 style={{
                                   textAlign: "right",
                                   verticalAlign: "bottom",
-                                  paddingRight: "35px",
+                                  paddingRight: "31px",
                                 }}
                               >
                                 PRICE

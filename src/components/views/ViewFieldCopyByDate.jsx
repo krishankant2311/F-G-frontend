@@ -16,14 +16,17 @@ import {
   getFieldCopyDownloadCrewLaborRowFields,
   getFieldCopyLaborLineDisplayTotal,
   getFieldCopyLineDisplayCost,
-  getOfficeFieldCopyRowCalculations,
+  getFieldCopyPdfRowCalculations,
   getFieldCopyPdfLaborManHours,
   getLaborPdfDescription,
   isFieldCopyCrewHoursAggregateLine,
   isFieldCopyLaborContext,
   isMongoObjectIdString,
+  mergeFieldCopyPdfCrewLaborRows,
+  resolveFieldCopyCrewBackendLineCostFromRaw,
   resolveFieldCopyCrewUnitRate,
   resolveFieldCopyDisplayJobType,
+  shouldHideFieldCopyPdfTableItemForCrewBreakdown,
 } from "../../utils/fieldCopyLaborDisplay";
 
 /** Field Copy PDF download — DESCRIPTION without trailing vendor suffix (vendor has its own column). */
@@ -33,11 +36,56 @@ function fieldCopyPdfDescriptionWithoutVendor(reference, vendorName) {
   const vendor = String(vendorName ?? "").trim();
   if (vendor) {
     const suffix = ` (${vendor})`;
-    if (ref.endsWith(suffix)) {
+    if (ref.toUpperCase().endsWith(suffix.toUpperCase())) {
       return ref.slice(0, -suffix.length).trim();
     }
   }
   return ref;
+}
+
+function isFieldCopyViewCrewLaborRow(g) {
+  if (!g) return false;
+  if (Number(g?.manHours) > 0) return true;
+  if (Number(g?.totalCost) > 0 && g?.jobType && !g?.reference) return true;
+  return false;
+}
+
+function laborPoolFromCopyBlock(block) {
+  const fromFieldCopies = Array.isArray(block?.fieldCopies)
+    ? block.fieldCopies.filter(isFieldCopyViewCrewLaborRow)
+    : [];
+  if (fromFieldCopies.length > 0) return fromFieldCopies;
+  if (!Array.isArray(block?.copies)) return [];
+  return block.copies.filter(isFieldCopyViewCrewLaborRow);
+}
+
+/** Same per-crew labor rows as View Field Copy screen (supports different hourly rates). */
+function collectFieldCopyCrewLaborFromCopyBlocks(copyBlocks, formDataJobType) {
+  const rows = [];
+  if (!Array.isArray(copyBlocks)) return rows;
+  for (const block of copyBlocks) {
+    for (const g of laborPoolFromCopyBlock(block)) {
+      if (!(Number(g?.totalCost) > 0)) continue;
+      const label =
+        resolveFieldCopyDisplayJobType({
+          jobType: g?.jobType,
+          formDataJobType,
+        }) || g?.jobType;
+      const backendLineCost = resolveFieldCopyCrewBackendLineCostFromRaw(g);
+      rows.push({
+        ...g,
+        jobType: label,
+        manHours: Number(g.manHours) || 0,
+        jobTypeCost: Number(g.jobTypeCost) || 0,
+        cost: Number(g.jobTypeCost) || Number(g.cost) || 0,
+        totalCost: Number(g.totalCost) || 0,
+        totalPrice: Number(g.totalCost) || Number(g.totalPrice) || 0,
+        fieldCopyBackendLineCost: backendLineCost,
+        isLaborTaxable: g?.isLaborTaxable ?? g?.isTaxable,
+      });
+    }
+  }
+  return rows;
 }
 
 /** Field Copy PDF — $ + amount (Office Copy pattern; html2pdf breaks inline-flex space-between). */
@@ -299,7 +347,7 @@ export default function ViewFieldCopyByDate() {
         .trim()
         .toUpperCase();
       const h = Number(g?.manHours || 0);
-      if (jt && h > 0) map[jt] = h;
+      if (jt && h > 0) map[jt] = (map[jt] || 0) + h;
     }
     const normalizedLabor = fieldLaborData.map((l) => ({
       ...l,
@@ -502,6 +550,12 @@ export default function ViewFieldCopyByDate() {
   };
 
   const getFieldCopyDownloadCrewLaborSources = () => {
+    const fromCopyBlocks = collectFieldCopyCrewLaborFromCopyBlocks(
+      copies,
+      formData?.jobType
+    );
+    if (fromCopyBlocks.length > 0) return fromCopyBlocks;
+
     const hoursFallback = fieldCopyDownloadCrewManHours;
     const enrichOpts = { ...crewLaborEnrichOptions, manHoursFallback: hoursFallback };
 
@@ -546,8 +600,22 @@ export default function ViewFieldCopyByDate() {
     return [];
   };
 
+  const fieldCopyPdfCrewLaborSources = useMemo(
+    () => getFieldCopyDownloadCrewLaborSources(),
+    [
+      copies,
+      fieldCopyDayLaborGroups,
+      fieldCopyDownloadCrewManHours,
+      displayJobType,
+      fieldLaborData,
+      laborData,
+      formData?.jobType,
+      apiOfficeDayLaborGroups,
+    ]
+  );
+
   const fieldCopyPdfCrewWorkSummaryRows = useMemo(() => {
-    return getFieldCopyDownloadCrewLaborSources()
+    return fieldCopyPdfCrewLaborSources
       .filter(isFieldCopyCrewLaborRowVisible)
       .map((labor) => ({
         labor,
@@ -564,6 +632,8 @@ export default function ViewFieldCopyByDate() {
           row.manHours > 0 || row.displayTotal > 0 || row.lineCost > 0
       );
   }, [
+    fieldCopyPdfCrewLaborSources,
+    copies,
     fieldCopyDayLaborGroups,
     fieldCopyDownloadCrewManHours,
     displayJobType,
@@ -574,6 +644,23 @@ export default function ViewFieldCopyByDate() {
     formData?.jobType,
     apiOfficeDayLaborGroups,
   ]);
+
+  /** Field Copy PDF — service table: same labor + same rate → one row. */
+  const fieldCopyPdfCrewTableMergedRows = useMemo(
+    () => mergeFieldCopyPdfCrewLaborRows(fieldCopyPdfCrewWorkSummaryRows),
+    [fieldCopyPdfCrewWorkSummaryRows]
+  );
+
+  /** Work Summary — merge same labor name (+ tax label), regardless of rate. */
+  const fieldCopyPdfCrewWorkSummaryMergedRows = useMemo(
+    () =>
+      mergeFieldCopyPdfCrewLaborRows(fieldCopyPdfCrewWorkSummaryRows, {
+        includeRateInKey: false,
+        includeTaxInKey: true,
+        getTaxLabel: crewLaborTaxLabel,
+      }),
+    [fieldCopyPdfCrewWorkSummaryRows, formData?.customerType]
+  );
 
   // console.log("data", showPreviousData,data);
 
@@ -662,6 +749,7 @@ export default function ViewFieldCopyByDate() {
     laborTotal,
     formData?.taxCredits,
     formData?.nonTaxCredits,
+    copies,
     fieldCopyDayLaborGroups,
     laborManHoursByJobType,
     laborHourlyRateByJobType,
@@ -1322,7 +1410,15 @@ export default function ViewFieldCopyByDate() {
       const mats = fieldCopyEntryLineItems
         .filter(
           (i) =>
-            !isFieldCopyCrewHoursAggregateLine(i, fieldCopyDownloadCrewManHours)
+            !isFieldCopyCrewHoursAggregateLine(
+              i,
+              fieldCopyDownloadCrewManHours
+            ) &&
+            !shouldHideFieldCopyPdfTableItemForCrewBreakdown(
+              i,
+              fieldCopyPdfCrewLaborSources,
+              fieldCopyDownloadCrewManHours
+            )
         )
         .map((i) => ({
           ...i,
@@ -1341,6 +1437,7 @@ export default function ViewFieldCopyByDate() {
     materialLaborData,
     formData?.jobType,
     fieldCopyDownloadCrewManHours,
+    fieldCopyPdfCrewLaborSources,
   ]);
 
   const fieldCopyPdfWorkSummaryTotals = useMemo(() => {
@@ -1980,6 +2077,11 @@ const handleInvoiceJobType = (jobType) => {
                               isFieldCopyCrewHoursAggregateLine(
                                 item,
                                 fieldCopyDownloadCrewManHours
+                              ) ||
+                              shouldHideFieldCopyPdfTableItemForCrewBreakdown(
+                                item,
+                                fieldCopyPdfCrewLaborSources,
+                                fieldCopyDownloadCrewManHours
                               )
                             ) {
                               return null;
@@ -1990,7 +2092,7 @@ const handleInvoiceJobType = (jobType) => {
                               markupVal,
                               displayTotal,
                               qtyText,
-                            } = getOfficeFieldCopyRowCalculations(item);
+                            } = getFieldCopyPdfRowCalculations(item);
                             return (
                             <tr key={idx}>
                               {/* <td className="text-xs">{item?.source}</td> */}
@@ -2039,16 +2141,8 @@ const handleInvoiceJobType = (jobType) => {
                             </tr>
                           );
                           })}
-                        {getFieldCopyDownloadCrewLaborSources()
-                          .filter(isFieldCopyCrewLaborRowVisible)
-                          .map((labor, laborIdx) => {
-                            const row = getFieldCopyDownloadCrewLaborRowFields(
-                              labor,
-                              laborManHoursByJobType,
-                              laborHourlyRateByJobType,
-                              formData?.jobType,
-                              findLaborRateForJobType
-                            );
+                        {fieldCopyPdfCrewTableMergedRows.map(
+                          ({ labor, row }, laborIdx) => {
                             if (!(row.manHours > 0) && !(row.displayTotal > 0)) {
                               return null;
                             }
@@ -2220,7 +2314,7 @@ const handleInvoiceJobType = (jobType) => {
                   </div>
                 );
               })}
-              {fieldCopyPdfCrewWorkSummaryRows.map(({ labor, row }, idx) => (
+              {fieldCopyPdfCrewWorkSummaryMergedRows.map(({ labor, row }, idx) => (
                 <div
                   key={`fc-ws-crew-${row.description}-${idx}`}
                   className={`${workSummaryGridClass} mt-1 items-baseline`}

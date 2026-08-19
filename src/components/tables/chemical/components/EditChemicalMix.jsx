@@ -2,8 +2,15 @@ import React, { useEffect, useState } from "react";
 import axios from "axios";
 import { toast } from "react-toastify";
 import {
-  applyChemicalMixPerOzPricing,
+  applyChemicalMixPricing,
+  chemicalMasterHasPrice,
+  normalizeChemicalMixRowForSave,
 } from "../../../../utils/chemicalMixPricing";
+import {
+  fetchAllMasterChemicals,
+  findMasterChemicalByName,
+  resolveMixLineChemicalOptionName,
+} from "../../../../utils/chemicalMixSync";
 
 const UPDATE_MIX_ERROR_TOAST_ID = "update-mix-error";
 const UPDATE_MIX_SUCCESS_TOAST_ID = "update-mix-success";
@@ -19,6 +26,7 @@ const emptyChemical = {
   price: "",
   costPerOz: "",
   pricePerOz: "",
+  pricePerOzFromDb: false,
 };
 
 const EditChemicalMix = ({ mix, onClose, onSuccess }) => {
@@ -33,23 +41,12 @@ const EditChemicalMix = ({ mix, onClose, onSuccess }) => {
     const fetchChemicals = async () => {
       try {
         const token = localStorage.getItem("f&gstafftoken");
-        const res = await axios.get(
-          `${process.env.REACT_APP_API_BASE_URL}/chemical-maintenance/get-all-chemical`,
-          {
-            headers: { token },
-            params: {
-              page: 1,
-              limit: 500,
-            },
-          }
+        const backendChemicals = await fetchAllMasterChemicals(
+          process.env.REACT_APP_API_BASE_URL,
+          token,
+          axios
         );
-
-        if (res.data.statusCode === 200) {
-          const { chemicals: backendChemicals = [] } = res.data.result || {};
-          setChemicalOptions(backendChemicals);
-        } else {
-          toast.error(res.data.message || "Failed to load chemicals");
-        }
+        setChemicalOptions(backendChemicals);
       } catch (error) {
         console.error(error);
         toast.error("Failed to load chemicals");
@@ -61,13 +58,19 @@ const EditChemicalMix = ({ mix, onClose, onSuccess }) => {
 
   /* ===== PREFILL DATA ===== */
   useEffect(() => {
-    if (mix) {
-      setMixName(mix.mixName || "");
-      setNotes(mix.notes || "");
-      setChemicals(
-        mix.chemicals?.map((item) =>
-          applyChemicalMixPerOzPricing({
-            chemicalName: item.chemicalName || item.brandName || "",
+    if (!mix) return;
+
+    setMixName(mix.mixName || "");
+    setNotes(mix.notes || "");
+    setChemicals(
+      mix.chemicals?.map((item) => {
+        const chemicalName = chemicalOptions.length
+          ? resolveMixLineChemicalOptionName(item, chemicalOptions)
+          : item.chemicalName || item.brandName || "";
+
+        return applyChemicalMixPricing(
+          {
+            chemicalName,
             quantity: item.quantity || "",
             measure: item.measure || "OZ / 100 GAL",
             brandName: item.brandName || "",
@@ -77,29 +80,31 @@ const EditChemicalMix = ({ mix, onClose, onSuccess }) => {
             price: item.price || "",
             costPerOz: item.costPerOz || "",
             pricePerOz: item.pricePerOz || "",
-          })
-        ) || [{ ...emptyChemical }]
-      );
-    }
-  }, [mix]);
+            pricePerOzFromDb:
+              item.pricePerOz != null && String(item.pricePerOz).trim() !== "",
+          },
+          "sync"
+        );
+      }) || [{ ...emptyChemical }]
+    );
+  }, [mix, chemicalOptions]);
 
   /* ===== HANDLE CHANGE ===== */
   const handleChange = (index, field, value) => {
     const updated = [...chemicals];
     updated[index][field] = value;
-    updated[index] = applyChemicalMixPerOzPricing(updated[index]);
+    updated[index] = applyChemicalMixPricing(updated[index], field);
     setChemicals(updated);
   };
 
   // When a chemical is selected from dropdown, prefill its details
   const handleChemicalSelect = (index, chemicalName) => {
-    const selected = chemicalOptions.find(
-      (c) => c.chemicalName === chemicalName
-    );
+    const selected = findMasterChemicalByName(chemicalName, chemicalOptions);
 
     const updated = [...chemicals];
 
     if (selected) {
+      const hasDbPrice = chemicalMasterHasPrice(selected);
       updated[index] = {
         ...updated[index],
         chemicalName: selected.chemicalName || "",
@@ -107,11 +112,16 @@ const EditChemicalMix = ({ mix, onClose, onSuccess }) => {
         brandName: selected.brandName || "",
         epaRegNo: selected.epaRegNo || "",
         type: selected.type || "",
-        cost: selected.cost ?? "",
-        price: selected.price ?? "",
+        costPerOz: selected.costPerOz ?? selected.cost ?? "",
+        pricePerOz: hasDbPrice
+          ? (selected.pricePerOz ?? selected.price ?? "")
+          : "",
+        pricePerOzFromDb: hasDbPrice,
+        cost: "",
+        price: "",
       };
 
-      updated[index] = applyChemicalMixPerOzPricing(updated[index]);
+      updated[index] = applyChemicalMixPricing(updated[index], "chemicalSelect");
     } else {
       updated[index].chemicalName = chemicalName;
     }
@@ -182,7 +192,7 @@ const EditChemicalMix = ({ mix, onClose, onSuccess }) => {
       return;
     }
 
-    const normalizedChemicals = chemicals.map(applyChemicalMixPerOzPricing);
+    const normalizedChemicals = chemicals.map(normalizeChemicalMixRowForSave);
     const payload = {
       mixName,
       chemicals: normalizedChemicals,
@@ -273,91 +283,136 @@ const EditChemicalMix = ({ mix, onClose, onSuccess }) => {
             </h4>
 
             <div className="grid grid-cols-2 gap-4">
-              <select
-                className="border px-2 py-2"
-                value={item.chemicalName}
-                onChange={(e) =>
-                  handleChemicalSelect(index, e.target.value)
-                }
-              >
-                <option value="">Select Chemical</option>
-                {chemicalOptions.map((chem) => (
-                  <option key={chem._id} value={chem.chemicalName}>
-                    {chem.chemicalName}
-                  </option>
-                ))}
-              </select>
+              <div>
+                <label>Chemical Name *</label>
+                <select
+                  className="w-full border px-2 py-[10px]"
+                  value={item.chemicalName}
+                  onChange={(e) =>
+                    handleChemicalSelect(index, e.target.value)
+                  }
+                >
+                  <option value="">Select Chemical</option>
+                  {item.chemicalName &&
+                    !chemicalOptions.some(
+                      (chem) => chem.chemicalName === item.chemicalName
+                    ) && (
+                      <option value={item.chemicalName}>
+                        {item.chemicalName}
+                      </option>
+                    )}
+                  {chemicalOptions.map((chem) => (
+                    <option key={chem._id} value={chem.chemicalName}>
+                      {chem.chemicalName}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-              <input
-                type="number"
-                placeholder="Quantity (OZ)"
-                className="border px-2 py-2"
-                value={item.quantity}
-                onChange={(e) =>
-                  handleChange(index, "quantity", e.target.value)
-                }
-              />
+              <div>
+                <label>Quantity (OZ / 100 GAL) *</label>
+                <input
+                  type="number"
+                  className="w-full border px-2 py-2"
+                  value={item.quantity}
+                  onChange={(e) =>
+                    handleChange(index, "quantity", e.target.value)
+                  }
+                />
+              </div>
 
-              <input
-                placeholder="Brand"
-                className="border px-2 py-2"
-                value={item.brandName}
-                onChange={(e) =>
-                  handleChange(index, "brandName", e.target.value)
-                }
-              />
+              <div>
+                <label>Measure</label>
+                <input
+                  className="w-full border px-2 py-2"
+                  value={item.measure}
+                  onChange={(e) =>
+                    handleChange(index, "measure", e.target.value)
+                  }
+                />
+              </div>
 
-              <input
-                placeholder="EPA Reg. #"
-                className="border px-2 py-2"
-                value={item.epaRegNo}
-                onChange={(e) =>
-                  handleChange(index, "epaRegNo", e.target.value)
-                }
-              />
+              <div>
+                <label>Brand Name</label>
+                <input
+                  className="w-full border px-2 py-2"
+                  value={item.brandName}
+                  onChange={(e) =>
+                    handleChange(index, "brandName", e.target.value)
+                  }
+                />
+              </div>
 
-              <input
-                placeholder="Type"
-                className="border px-2 py-2"
-                value={item.type}
-                onChange={(e) =>
-                  handleChange(index, "type", e.target.value)
-                }
-              />
+              <div>
+                <label>EPA Reg. #</label>
+                <input
+                  className="w-full border px-2 py-2"
+                  value={item.epaRegNo}
+                  onChange={(e) =>
+                    handleChange(index, "epaRegNo", e.target.value)
+                  }
+                  placeholder="EPA not required"
+                />
+              </div>
 
-              <input
-                readOnly
-                className="border px-2 py-2 bg-gray-100"
-                placeholder="COST / OZ"
-                value={item.costPerOz}
-              />
+              <div>
+                <label>Type</label>
+                <input
+                  className="w-full border px-2 py-2"
+                  value={item.type}
+                  onChange={(e) =>
+                    handleChange(index, "type", e.target.value)
+                  }
+                />
+              </div>
 
-              <input
-                readOnly
-                className="border px-2 py-2 bg-gray-100"
-                placeholder="PRICE / OZ"
-                value={item.pricePerOz}
-              />
+              <div>
+                <label>COST / OZ *</label>
+                <input
+                  type="number"
+                  className="w-full border px-2 py-2"
+                  value={item.costPerOz}
+                  onChange={(e) =>
+                    handleChange(index, "costPerOz", e.target.value)
+                  }
+                />
+              </div>
 
-              <input
-                type="number"
-                placeholder="Cost"
-                className="border px-2 py-2"
-                value={item.cost}
-                onChange={(e) =>
-                  handleChange(index, "cost", e.target.value)
-                }
-              />
+              <div>
+                <label>Cost *</label>
+                <input
+                  type="number"
+                  className="w-full border px-2 py-2"
+                  value={item.cost}
+                  onChange={(e) =>
+                    handleChange(index, "cost", e.target.value)
+                  }
+                />
+              </div>
 
-              <input
-                type="number"
-                placeholder="Price"
-                className="border px-2 py-2"
-                value={item.price}
-                onChange={(e) =>
-                  handleChange(index, "price", e.target.value)
-                }
-              />
+              <div>
+                <label>PRICE / OZ *</label>
+                <input
+                  type="number"
+                  className="w-full border px-2 py-2"
+                  value={item.pricePerOz}
+                  onChange={(e) =>
+                    handleChange(index, "pricePerOz", e.target.value)
+                  }
+                />
+              </div>
+
+              <div>
+                <label>Price *</label>
+                <input
+                  type="number"
+                  className="w-full border px-2 py-2"
+                  value={item.price}
+                  onChange={(e) =>
+                    handleChange(index, "price", e.target.value)
+                  }
+                />
+              </div>
             </div>
 
             {/* ACTIONS */}

@@ -277,6 +277,12 @@ export default function CustomerTreatmentList() {
       const newQuantity = parseFloat(updatedData.quantity) || 0;
       const newPrice = parseFloat(updatedData.price) || 0;
       const newProjectCode = updatedData.projectCode !== undefined && updatedData.projectCode !== null ? String(updatedData.projectCode).trim() : undefined;
+      const getLocalDateOnlyStr = (d = new Date()) =>
+        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const rescheduleOverdue =
+        item?.status === "Overdue" &&
+        updatedData.scheduledDate &&
+        updatedData.scheduledDate >= getLocalDateOnlyStr();
 
       const payload = {
         customerName: customer.customerName,
@@ -291,6 +297,7 @@ export default function CustomerTreatmentList() {
             updated.quantity = newQuantity;
             updated.price = newPrice;
             if (newProjectCode !== undefined) updated.projectCode = newProjectCode;
+            if (rescheduleOverdue) updated.status = "Scheduled";
             // Recalculate cost if unitCost exists
             if (t.unitCost && newQuantity > 0) {
               updated.cost = t.unitCost * newQuantity;
@@ -306,6 +313,7 @@ export default function CustomerTreatmentList() {
             updated.qty = newQuantity;
             updated.totalPricePerTank = newPrice;
             if (newProjectCode !== undefined) updated.projectCode = newProjectCode;
+            if (rescheduleOverdue) updated.status = "Scheduled";
             // Recalculate cost if unitCost exists
             if (t.unitCost && newQuantity > 0) {
               updated.totalCostPerTank = t.unitCost * newQuantity;
@@ -760,7 +768,7 @@ export default function CustomerTreatmentList() {
               }`}
               onClick={() => {
                 navigate(
-                  "/panel/office/chemical-maintenance/treatment?status=Completed",
+                  "/panel/office/chemical-maintenance/completed-treatments",
                 );
               }}
             >

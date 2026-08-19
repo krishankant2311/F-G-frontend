@@ -33,6 +33,10 @@ import {
   scheduleItemAppliesLabor,
 } from "../../../../../utils/otherTreatmentCategory";
 import {
+  sumCompletedOtherTreatmentsAmount,
+  sumScheduledOtherTreatmentsAmount,
+} from "../../../../../utils/chemicalCustomerSummary";
+import {
   filterTreatmentsByProgramType,
   isOtherChemicalProgramTreatment,
   normalizeTreatmentNameKey,
@@ -185,6 +189,7 @@ const CustomerAnnualProgramSchedule = () => {
   // other treatments form (newly added in this page)
   const [newOtherTreatments, setNewOtherTreatments] = useState([emptyOtherFormRow()]);
   const [newOtherChemicalTreatments, setNewOtherChemicalTreatments] = useState([emptyOtherFormRow()]);
+  const [otherOmitFlags, setOtherOmitFlags] = useState({});
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitLockRef = useRef(false);
@@ -348,6 +353,11 @@ const CustomerAnnualProgramSchedule = () => {
   useEffect(() => {
     if (!state) return;
     setNewOtherChemicalTreatments([emptyOtherFormRow()]);
+    const flags = {};
+    (state.otherTreatments || []).forEach((ot, i) => {
+      flags[i] = Boolean(ot.omitFromContractTotal);
+    });
+    setOtherOmitFlags(flags);
   }, [state?.customerId]);
 
   // Initialize dates, projectCodes, and rowQty from state data (only once on mount) - indices match main table (all annual then other)
@@ -626,8 +636,13 @@ const CustomerAnnualProgramSchedule = () => {
       type: "other",
       originalIndex,
       isChemicalTreatment: isChemicalOtherTreatment(ot),
+      omitFromContractTotal:
+        otherOmitFlags[originalIndex] ?? Boolean(ot.omitFromContractTotal),
     }];
   });
+
+  const isScheduleRowOmitted = (t) =>
+    t.type === "other" && Boolean(t.omitFromContractTotal);
 
   // Extra annual rows added from duplicate (+) action in schedule table.
   // These rows share qty/projectCode with their base annual treatment but carry
@@ -701,6 +716,7 @@ const CustomerAnnualProgramSchedule = () => {
 
   // ✅ total (price total) - recalculate based on current quantities
   const programTotal = visibleScheduledTreatments.reduce((sum, t) => {
+    if (isScheduleRowOmitted(t)) return sum;
     const qtyKey = getQtyKey(t);
     const currentQty =
       rowQty[qtyKey] !== undefined
@@ -716,6 +732,7 @@ const CustomerAnnualProgramSchedule = () => {
 
   // ✅ total (cost total) - recalculate based on current quantities
   const programCostTotal = visibleScheduledTreatments.reduce((sum, t, index) => {
+    if (isScheduleRowOmitted(t)) return sum;
     const qtyKey = getQtyKey(t);
     const currentQty = rowQty[qtyKey] !== undefined ? wholeQuantity(rowQty[qtyKey]) : wholeQuantity(t.quantity || 0);
     const unitCost = resolveScheduleRowUnitCost(t, scheduleCostContext);
@@ -723,6 +740,7 @@ const CustomerAnnualProgramSchedule = () => {
   }, 0);
 
   const programLaborCostTotal = visibleScheduledTreatments.reduce((sum, t) => {
+    if (isScheduleRowOmitted(t)) return sum;
     if (!scheduleItemAppliesLabor(t)) return sum;
     const qtyKey = getQtyKey(t);
     const currentQty =
@@ -735,6 +753,7 @@ const CustomerAnnualProgramSchedule = () => {
   const programCostPer100GalTankTotal = programCostTotal + programLaborCostTotal;
 
   const programLaborPriceTotal = visibleScheduledTreatments.reduce((sum, t) => {
+    if (isScheduleRowOmitted(t)) return sum;
     if (!scheduleItemAppliesLabor(t)) return sum;
     const qtyKey = getQtyKey(t);
     const currentQty =
@@ -813,6 +832,15 @@ const CustomerAnnualProgramSchedule = () => {
         ...updated[index],
         scheduledDate: value || "",
         scheduledDates: next,
+      };
+      setRows(updated);
+      return;
+    }
+
+    if (field === "omitFromContractTotal") {
+      updated[index] = {
+        ...updated[index],
+        omitFromContractTotal: Boolean(value),
       };
       setRows(updated);
       return;
@@ -1403,6 +1431,8 @@ const CustomerAnnualProgramSchedule = () => {
           qty: updatedQty,
           projectCode: updatedProjectCode,
           status: ot.status || "Scheduled",
+          omitFromContractTotal:
+            otherOmitFlags[index] ?? Boolean(ot.omitFromContractTotal),
           totalCostPerTank: resolveOtherTreatmentCostPerTank(
             {
               totalCostPerTank: ot.totalCostPerTank,
@@ -1513,13 +1543,9 @@ const CustomerAnnualProgramSchedule = () => {
         .filter((at) => at.scheduleDate)
         .reduce((sum, at) => sum + toSafeNumber(at.price), 0);
 
-      const scheduledOtherAmount = (updatedOtherTreatments || [])
-        .filter((ot) => hasValidOtherTreatmentDate(resolveOtherTreatmentDate(ot)))
-        .reduce((sum, ot) => {
-          const qty = toSafeNumber(ot.qty);
-          const pricePerTank = toSafeNumber(ot.totalPricePerTank);
-          return sum + (qty * pricePerTank);
-        }, 0);
+      const scheduledOtherAmount = sumScheduledOtherTreatmentsAmount(
+        updatedOtherTreatments
+      );
 
       const annualProgramTotal = scheduledAnnualAmount + scheduledOtherAmount;
 
@@ -1527,13 +1553,9 @@ const CustomerAnnualProgramSchedule = () => {
         .filter((at) => (at.status || "").toString().trim().toLowerCase() === "completed")
         .reduce((sum, at) => sum + toSafeNumber(at.price), 0);
 
-      const completedOtherAmount = (updatedOtherTreatments || [])
-        .filter((ot) => (ot.status || "").toString().trim().toLowerCase() === "completed")
-        .reduce((sum, ot) => {
-          const qty = toSafeNumber(ot.qty);
-          const pricePerTank = toSafeNumber(ot.totalPricePerTank);
-          return sum + (qty * pricePerTank);
-        }, 0);
+      const completedOtherAmount = sumCompletedOtherTreatmentsAmount(
+        updatedOtherTreatments
+      );
 
       const usedAmount = completedAnnualAmount + completedOtherAmount;
       const programRemainingAmount = annualProgramTotal - usedAmount;
@@ -1544,13 +1566,9 @@ const CustomerAnnualProgramSchedule = () => {
       const previousScheduledAnnualAmount = previousAnnualWithoutOtherChemical
         .filter((at) => at.scheduleDate)
         .reduce((sum, at) => sum + toSafeNumber(at.price), 0);
-      const previousScheduledOtherAmount = (currentCustomer.otherTreatments || [])
-        .filter((ot) => hasValidOtherTreatmentDate(resolveOtherTreatmentDate(ot)))
-        .reduce((sum, ot) => {
-          const qty = toSafeNumber(ot.qty);
-          const pricePerTank = toSafeNumber(ot.totalPricePerTank);
-          return sum + qty * pricePerTank;
-        }, 0);
+      const previousScheduledOtherAmount = sumScheduledOtherTreatmentsAmount(
+        currentCustomer.otherTreatments || []
+      );
       const previousScheduledProgramTotal =
         previousScheduledAnnualAmount + previousScheduledOtherAmount;
 
@@ -1780,7 +1798,28 @@ const CustomerAnnualProgramSchedule = () => {
                       />
                     </td>
                     <td className="border p-2">
-                      <div className="flex justify-center gap-4" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex justify-center gap-4 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                        {item.type === "other" && (
+                          <label
+                            className="inline-flex items-center gap-1 text-[10px]"
+                            title="Omit from contract total"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={
+                                otherOmitFlags[item.originalIndex] ??
+                                Boolean(item.omitFromContractTotal)
+                              }
+                              onChange={(e) =>
+                                setOtherOmitFlags((prev) => ({
+                                  ...prev,
+                                  [item.originalIndex]: e.target.checked,
+                                }))
+                              }
+                            />
+                            <span>Omit</span>
+                          </label>
+                        )}
                         <button
                           type="button"
                           title="View"
@@ -1905,11 +1944,12 @@ const CustomerAnnualProgramSchedule = () => {
 
         <table className="w-full border border-gray-300 table-fixed">
           <colgroup>
-            <col style={{ width: "60%" }} />
+            <col style={{ width: "50%" }} />
             <col style={{ width: "7%" }} />
-            <col style={{ width: "15%" }} />
+            <col style={{ width: "13%" }} />
             <col style={{ width: "6%" }} />
             <col style={{ width: "6%" }} />
+            <col style={{ width: "12%" }} />
             <col style={{ width: "6%" }} />
           </colgroup>
           <thead className="bg-[#00613e] text-white">
@@ -1919,6 +1959,7 @@ const CustomerAnnualProgramSchedule = () => {
               <th className="p-2 border">SCHEDULE DATE</th>
               <th className="p-2 border">COST</th>
               <th className="p-2 border">PRICE</th>
+              <th className="p-2 border text-xs leading-tight">OMIT FROM CONTRACT TOTAL</th>
               <th className="p-2 border">ACTION</th>
             </tr>
           </thead>
@@ -2181,6 +2222,21 @@ const CustomerAnnualProgramSchedule = () => {
                     />
                   </td>
 
+                  <td className="border p-2 text-center align-middle">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(item.omitFromContractTotal)}
+                      onChange={(e) =>
+                        handleOtherTreatmentChange(
+                          index,
+                          "omitFromContractTotal",
+                          e.target.checked
+                        )
+                      }
+                      title="Omit from contract total"
+                    />
+                  </td>
+
                   {/* Actions - align + and − properly in center */}
                   <td className="border p-2 align-middle">
                     <div className="flex items-center justify-center gap-2">
@@ -2219,11 +2275,12 @@ const CustomerAnnualProgramSchedule = () => {
 
         <table className="w-full border border-gray-300 table-fixed">
           <colgroup>
-            <col style={{ width: "60%" }} />
+            <col style={{ width: "50%" }} />
             <col style={{ width: "7%" }} />
-            <col style={{ width: "15%" }} />
+            <col style={{ width: "13%" }} />
             <col style={{ width: "6%" }} />
             <col style={{ width: "6%" }} />
+            <col style={{ width: "12%" }} />
             <col style={{ width: "6%" }} />
           </colgroup>
           <thead className="bg-[#00613e] text-white">
@@ -2233,6 +2290,7 @@ const CustomerAnnualProgramSchedule = () => {
               <th className="p-2 border">SCHEDULE DATE</th>
               <th className="p-2 border">COST</th>
               <th className="p-2 border">PRICE</th>
+              <th className="p-2 border text-xs leading-tight">OMIT FROM CONTRACT TOTAL</th>
               <th className="p-2 border">ACTION</th>
             </tr>
           </thead>
@@ -2453,6 +2511,20 @@ const CustomerAnnualProgramSchedule = () => {
                       }
                       className="w-full border px-2 py-1"
                       placeholder="0.00"
+                    />
+                  </td>
+                  <td className="border p-2 text-center align-middle">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(item.omitFromContractTotal)}
+                      onChange={(e) =>
+                        handleOtherChemicalTreatmentChange(
+                          index,
+                          "omitFromContractTotal",
+                          e.target.checked
+                        )
+                      }
+                      title="Omit from contract total"
                     />
                   </td>
                   <td className="border p-2 align-middle">

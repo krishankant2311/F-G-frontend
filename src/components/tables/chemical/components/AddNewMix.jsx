@@ -5,7 +5,15 @@ import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { toast, ToastContainer } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
-import { applyChemicalMixPerOzPricing } from "../../../../utils/chemicalMixPricing";
+import {
+  applyChemicalMixPricing,
+  chemicalMasterHasPrice,
+  normalizeChemicalMixRowForSave,
+} from "../../../../utils/chemicalMixPricing";
+import {
+  fetchAllMasterChemicals,
+  findMasterChemicalByName,
+} from "../../../../utils/chemicalMixSync";
 
 const ADD_MIX_ERROR_TOAST_ID = "add-mix-error";
 const ADD_MIX_SUCCESS_TOAST_ID = "add-mix-success";
@@ -21,6 +29,7 @@ const emptyChemical = {
   price: "",
   costPerOz: "",
   pricePerOz: "",
+  pricePerOzFromDb: false,
 };
 
 const AddNewMix = () => {
@@ -36,7 +45,7 @@ const AddNewMix = () => {
   const handleChange = (index, field, value) => {
     const updated = [...chemicals];
     updated[index][field] = value;
-    updated[index] = applyChemicalMixPerOzPricing(updated[index]);
+    updated[index] = applyChemicalMixPricing(updated[index], field);
     setChemicals(updated);
   };
 
@@ -72,24 +81,12 @@ const AddNewMix = () => {
   const fetchChemicals = async () => {
     try {
       const token = localStorage.getItem("f&gstafftoken");
-  
-      const res = await axios.get(
-        `${process.env.REACT_APP_API_BASE_URL}/chemical-maintenance/get-all-chemical`,
-        {
-          headers: { token },
-          params: {
-            page: 1,
-            limit: 500,
-          },
-        }
+      const backendChemicals = await fetchAllMasterChemicals(
+        process.env.REACT_APP_API_BASE_URL,
+        token,
+        axios
       );
-
-      if (res.data.statusCode === 200) {
-        const { chemicals: backendChemicals = [] } = res.data.result || {};
-        setChemicalOptions(backendChemicals);
-      } else {
-        toast.error(res.data.message || "Failed to load chemicals");
-      }
+      setChemicalOptions(backendChemicals);
     } catch (error) {
       toast.error("Failed to load chemicals");
     }
@@ -97,13 +94,12 @@ const AddNewMix = () => {
 
   // When a chemical is selected from dropdown, prefill its details
   const handleChemicalSelect = (index, chemicalName) => {
-    const selected = chemicalOptions.find(
-      (c) => c.chemicalName === chemicalName
-    );
+    const selected = findMasterChemicalByName(chemicalName, chemicalOptions);
 
     const updated = [...chemicals];
 
     if (selected) {
+      const hasDbPrice = chemicalMasterHasPrice(selected);
       updated[index] = {
         ...updated[index],
         chemicalName: selected.chemicalName || "",
@@ -111,11 +107,16 @@ const AddNewMix = () => {
         brandName: selected.brandName || "",
         epaRegNo: selected.epaRegNo || "",
         type: selected.type || "",
-        cost: selected.cost ?? "",
-        price: selected.price ?? "",
+        costPerOz: selected.costPerOz ?? selected.cost ?? "",
+        pricePerOz: hasDbPrice
+          ? (selected.pricePerOz ?? selected.price ?? "")
+          : "",
+        pricePerOzFromDb: hasDbPrice,
+        cost: "",
+        price: "",
       };
 
-      updated[index] = applyChemicalMixPerOzPricing(updated[index]);
+      updated[index] = applyChemicalMixPricing(updated[index], "chemicalSelect");
     } else {
       // just update name if not found in options
       updated[index].chemicalName = chemicalName;
@@ -130,13 +131,22 @@ const AddNewMix = () => {
     const trim = (v) => (v != null ? String(v).trim() : "");
     if (!trim(item.chemicalName)) return `Chemical ${num}: Please select Chemical Name`;
     if (!trim(item.quantity)) return `Chemical ${num}: Please enter Quantity (OZ / 100 GAL)`;
-    if (!trim(item.type)) return `Chemical ${num}: Please enter Type`;
+    if (trim(item.costPerOz) === "" && item.costPerOz !== 0)
+      return `Chemical ${num}: Please enter COST / OZ`;
+    if (trim(item.pricePerOz) === "" && item.pricePerOz !== 0)
+      return `Chemical ${num}: Please enter PRICE / OZ`;
     if (trim(item.cost) === "" && item.cost !== 0) return `Chemical ${num}: Please enter Cost`;
     if (trim(item.price) === "" && item.price !== 0) return `Chemical ${num}: Please enter Price`;
     const qty = parseFloat(item.quantity);
     const cost = parseFloat(item.cost);
     const price = parseFloat(item.price);
     if (!Number.isFinite(qty) || qty <= 0) return `Chemical ${num}: Please enter a valid Quantity`;
+    const costPerOz = parseFloat(item.costPerOz);
+    const pricePerOz = parseFloat(item.pricePerOz);
+    if (!Number.isFinite(costPerOz) || costPerOz < 0)
+      return `Chemical ${num}: Please enter a valid COST / OZ`;
+    if (!Number.isFinite(pricePerOz) || pricePerOz < 0)
+      return `Chemical ${num}: Please enter a valid PRICE / OZ`;
     if (!Number.isFinite(cost) || cost < 0) return `Chemical ${num}: Please enter a valid Cost`;
     if (!Number.isFinite(price) || price < 0) return `Chemical ${num}: Please enter a valid Price`;
     return null;
@@ -215,7 +225,7 @@ const AddNewMix = () => {
 
       setIsSaving(true);
 
-      const normalizedChemicals = chemicals.map(applyChemicalMixPerOzPricing);
+      const normalizedChemicals = chemicals.map(normalizeChemicalMixRowForSave);
       const payload = {
         mixName,
         chemicals: normalizedChemicals,
@@ -372,7 +382,7 @@ const AddNewMix = () => {
                 </div>
 
                 <div>
-                  <label>Type *</label>
+                  <label>Type</label>
                   <input
                     className="w-full border px-2 py-2"
                     value={item.type}
@@ -385,18 +395,12 @@ const AddNewMix = () => {
                 <div>
                   <label>COST / OZ *</label>
                   <input
-                    readOnly
-                    className="w-full border px-2 py-2 bg-gray-100"
+                    type="number"
+                    className="w-full border px-2 py-2"
                     value={item.costPerOz}
-                  />
-                </div>
-
-                <div>
-                  <label>PRICE / OZ *</label>
-                  <input
-                    readOnly
-                    className="w-full border px-2 py-2 bg-gray-100"
-                    value={item.pricePerOz}
+                    onChange={(e) =>
+                      handleChange(index, "costPerOz", e.target.value)
+                    }
                   />
                 </div>
 
@@ -408,6 +412,18 @@ const AddNewMix = () => {
                     value={item.cost}
                     onChange={(e) =>
                       handleChange(index, "cost", e.target.value)
+                    }
+                  />
+                </div>
+
+                <div>
+                  <label>PRICE / OZ *</label>
+                  <input
+                    type="number"
+                    className="w-full border px-2 py-2"
+                    value={item.pricePerOz}
+                    onChange={(e) =>
+                      handleChange(index, "pricePerOz", e.target.value)
                     }
                   />
                 </div>

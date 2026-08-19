@@ -16,6 +16,12 @@ export function formatSummaryDescription(description) {
   return text ? text.toUpperCase() : "-";
 }
 
+/** Same Job Name text as Project Wall (`project.jobName`). */
+export function resolveSummaryJobName(project) {
+  const name = String(project?.jobName || "").trim();
+  return name || "-";
+}
+
 function resolveGroupCrewLabor(group, useCost) {
   const storedCost = Number(group?.totalCost) || 0;
   const storedPrice = Number(group?.totalPrice) || 0;
@@ -256,7 +262,7 @@ export function downloadCustomerSummaryCsv(
   const headers = costMode
     ? [
         "Project",
-        "Description",
+        "Job Name",
         "Material Cost",
         "Material Price",
         "Labor Cost",
@@ -273,7 +279,7 @@ export function downloadCustomerSummaryCsv(
       ]
     : [
         "Project",
-        "Description",
+        "Job Name",
         "Material Price",
         "Labor Price",
         "Contract Labor Price",
@@ -288,7 +294,7 @@ export function downloadCustomerSummaryCsv(
     if (costMode) {
       return [
         row.projectCode,
-        row.description,
+        row.jobName,
         formatSummaryMoneyCsv(row.materialCost),
         formatSummaryMoneyCsv(row.materialPrice),
         formatSummaryMoneyCsv(row.laborCost),
@@ -306,7 +312,7 @@ export function downloadCustomerSummaryCsv(
     }
     return [
       row.projectCode,
-      row.description,
+      row.jobName,
       formatSummaryMoneyCsv(row.materialPrice),
       formatSummaryMoneyCsv(row.laborPrice),
       formatSummaryMoneyCsv(row.contractLaborPrice),

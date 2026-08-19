@@ -6,6 +6,7 @@ import {
   recalcFgFieldCopyLineTotals,
   recalcOtherFieldCopyLine,
   syncFgCostPriceOnUserEdit,
+  syncFgLineFromMarkupEdit,
 } from "./materialReference";
 
 export function isMergeableMaterialRow(form) {
@@ -220,18 +221,23 @@ export function applyPreviewMaterialRowFieldChange(row, name, value) {
   }
 
   if (name === "markup" || name === "markUp") {
-    const markupVal = parseFloat(updated.markUp ?? updated.markup) || 0;
-    updated.markup = markupVal;
-    updated.markUp = markupVal;
+    if (value === "" || value === ".") {
+      updated.markup = value;
+      updated.markUp = value;
+    } else {
+      const mVal = parseFloat(value);
+      if (!Number.isNaN(mVal) && mVal >= 0) {
+        updated.markup = mVal;
+        updated.markUp = mVal;
+      }
+    }
 
-    if (updated.source === "Other") {
-      updated = recalcOtherFieldCopyLine(updated, "preserve");
-    } else if (updated.source === "F&G") {
-      const totalCost = parseFloat(updated.totalCost) || 0;
-      updated.totalPrice =
-        totalCost > 0
-          ? Math.round((totalCost + (totalCost * markupVal) / 100) * 100) / 100
-          : "";
+    if (value !== ".") {
+      if (updated.source === "Other") {
+        updated = recalcOtherFieldCopyLine(updated, "markup");
+      } else if (updated.source === "F&G") {
+        updated = syncFgLineFromMarkupEdit(updated);
+      }
     }
   }
 

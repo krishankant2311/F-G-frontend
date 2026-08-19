@@ -351,7 +351,7 @@ export default function ChemicalDashboardTable() {
               }`}
               onClick={() => {
                 navigate(
-                  "/panel/office/chemical-maintenance/treatment?status=Completed",
+                  "/panel/office/chemical-maintenance/completed-treatments",
                 );
               }}
             >

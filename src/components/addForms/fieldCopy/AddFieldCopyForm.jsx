@@ -16,6 +16,7 @@ import {
   normalizeLaborLumpSumEditableAmount,
   recalcFgFieldCopyLineTotals,
   syncFgCostPriceOnUserEdit,
+  syncFgLineFromMarkupEdit,
   getMaterialNameInputValue,
   otherFieldCopyCostDisplayValue,
   recalcOtherFieldCopyLine,
@@ -31,13 +32,13 @@ export default function AddFieldCopyForm() {
       referenceBase: "",
       markup: 100,
       markUp: 100,
-      cost: 0,
+      cost: "",
       reference: "",
       measure: "",
       quantity: "",
       price: "",
-      totalCost: 0,
-      totalPrice: 0,
+      totalCost: "",
+      totalPrice: "",
       invoice: "",
       PO: "",
       isTaxable: false,
@@ -245,11 +246,16 @@ export default function AddFieldCopyForm() {
     const updatedForm = { ...updatedForms[index], [name]: value };
 
     if (name === "markup" || name === "markUp") {
-      const mVal = parseFloat(value);
-      const normalized =
-        value === "" || Number.isNaN(mVal) ? "" : mVal;
-      updatedForm.markup = normalized;
-      updatedForm.markUp = normalized;
+      if (value === "" || value === ".") {
+        updatedForm.markup = value;
+        updatedForm.markUp = value;
+      } else {
+        const mVal = parseFloat(value);
+        if (!Number.isNaN(mVal) && mVal >= 0) {
+          updatedForm.markup = mVal;
+          updatedForm.markUp = mVal;
+        }
+      }
     }
 
     if (name === "cost" || name === "totalCost") {
@@ -325,11 +331,21 @@ export default function AddFieldCopyForm() {
       isLaborOrLumpSum &&
       (name === "cost" || name === "markUp" || name === "markup")
     ) {
-      const cost = parseFloat(updatedForm.cost) || 0;
-      const markupPercent = parseFloat(updatedForm.markUp) || 0;
+      const cost = parseFloat(updatedForm.cost);
+      const markupPercent = parseFloat(updatedForm.markUp ?? updatedForm.markup);
 
-      updatedForm.totalCost = cost;
-      updatedForm.totalPrice = cost + (cost * markupPercent) / 100;
+      if (!Number.isFinite(cost) || cost <= 0) {
+        updatedForm.totalCost = "";
+        updatedForm.totalPrice = "";
+      } else {
+        updatedForm.totalCost = cost;
+        const useMarkup =
+          Number.isFinite(markupPercent) && markupPercent >= 0
+            ? markupPercent
+            : 0;
+        updatedForm.totalPrice =
+          Math.round((cost + (cost * useMarkup) / 100) * 100) / 100;
+      }
     }
 
     if (name === "cost" && updatedForm.source === "Other") {
@@ -359,7 +375,14 @@ export default function AddFieldCopyForm() {
         if (name === "price") {
           Object.assign(updatedForm, syncFgCostPriceOnUserEdit(updatedForm, "price"));
         } else {
-          Object.assign(updatedForm, recalcFgFieldCopyLineTotals(updatedForm));
+          const markupRaw = updatedForm.markup ?? updatedForm.markUp;
+          const markupEmpty =
+            markupRaw === "" || markupRaw === null || markupRaw === undefined;
+          if (markupEmpty) {
+            Object.assign(updatedForm, syncFgLineFromMarkupEdit(updatedForm));
+          } else {
+            Object.assign(updatedForm, recalcFgFieldCopyLineTotals(updatedForm));
+          }
         }
       } else {
         updatedForm.totalPrice = price && quantity ? price * quantity : "";
@@ -368,35 +391,24 @@ export default function AddFieldCopyForm() {
     }
 
     if (name === "markup" || name === "markUp") {
-      const isTax =
-        updatedForm.isTaxable === "true" || updatedForm.isTaxable === true
-          ? true
-          : false;
-      const markup =
-        parseFloat(updatedForm.markup ?? updatedForm.markUp) || 0;
       if (updatedForm.source === "Other") {
         Object.assign(
           updatedForm,
-          recalcOtherFieldCopyLine(updatedForm, "preserve")
+          recalcOtherFieldCopyLine(updatedForm, "markup")
         );
-      } else {
-        let costBase;
-        if (updatedForm.source === "F&G") {
-          costBase =
-            parseFloat(updatedForm.totalCost) ||
-            parseFloat(updatedForm.cost) ||
-            0;
-          updatedForm.totalCost = costBase;
-        } else {
-          costBase = parseFloat(updatedForm.totalCost) || 0;
+      } else if (updatedForm.source === "F&G") {
+        if (value !== ".") {
+          Object.assign(updatedForm, syncFgLineFromMarkupEdit(updatedForm));
         }
-        if (false) {
-          const intermediatePrice =
-            costBase + (markup * costBase) / 100;
-          updatedForm.totalPrice =
-            intermediatePrice + (adminTax * intermediatePrice) / 100;
+      } else {
+        const costBase = parseFloat(updatedForm.totalCost);
+        if (!Number.isFinite(costBase) || costBase <= 0) {
+          updatedForm.totalPrice = "";
         } else {
-          updatedForm.totalPrice = costBase + (markup * costBase) / 100;
+          const markup =
+            parseFloat(updatedForm.markup ?? updatedForm.markUp) || 0;
+          updatedForm.totalPrice =
+            Math.round((costBase + (markup * costBase) / 100) * 100) / 100;
         }
       }
     }
@@ -409,17 +421,19 @@ export default function AddFieldCopyForm() {
         );
       } else {
         const markup = parseFloat(updatedForm.markup) || 0;
+        const totalCostNum = parseFloat(updatedForm.totalCost);
 
-        if (false) {
+        if (!Number.isFinite(totalCostNum) || totalCostNum <= 0) {
+          updatedForm.totalPrice = "";
+        } else if (false) {
           const intermediatePrice =
-            updatedForm.totalCost + (markup * updatedForm.totalCost) / 100;
+            totalCostNum + (markup * totalCostNum) / 100;
           updatedForm.totalPrice =
             intermediatePrice + (adminTax * intermediatePrice) / 100;
         } else {
-          const intermediatePrice =
-            updatedForm.totalCost + (markup * updatedForm.totalCost) / 100;
           updatedForm.totalPrice =
-            intermediatePrice + (0 * intermediatePrice) / 100;
+            Math.round((totalCostNum + (markup * totalCostNum) / 100) * 100) /
+            100;
         }
       }
       updatedForm.isTaxable =
@@ -471,8 +485,7 @@ export default function AddFieldCopyForm() {
     };
     if (updatedForms[index].source === "F&G") {
       row = ensureFgCostFromPrice(row);
-      const unitCost = Number.parseFloat(row.cost) || 0;
-      row.totalCost = unitCost > 0 && qty > 0 ? unitCost * qty : "";
+      row = recalcFgFieldCopyLineTotals(row);
     }
     updatedForms[index] = applyReferenceVendorToForm(row);
     setForms(updatedForms);
@@ -654,7 +667,7 @@ export default function AddFieldCopyForm() {
         referenceBase: "",
         markup: 100,
         markUp: 100,
-        cost: 0,
+        cost: "",
         reference: "",
         measure: "",
         quantity: "",
@@ -1288,7 +1301,7 @@ export default function AddFieldCopyForm() {
                             value={
                               formData.markup ?? formData.markUp ?? ""
                             }
-                            placeholder="%"
+                            placeholder="Enter markUp"
                           />
                         </div>
                         <div className="flex flex-nowrap items-end gap-x-16 shrink-0">
@@ -1319,8 +1332,13 @@ export default function AddFieldCopyForm() {
                               className="border-b border-[grey] outline-none w-[180px]"
                               id={`totalPrice-fg-${index}`}
                               name="totalPrice"
-                              placeholder="Total price goes here..."
-                              value={formData.totalPrice}
+                              placeholder="Total price goes here"
+                              value={
+                                formData.totalPrice === 0 ||
+                                formData.totalPrice === "0"
+                                  ? ""
+                                  : formData.totalPrice ?? ""
+                              }
                               readOnly
                               min={0}
                               step="any"
@@ -1474,7 +1492,7 @@ export default function AddFieldCopyForm() {
                             name="cost"
                             onChange={(e) => handleInputChange(e, index)}
                             value={formData.cost}
-                            placeholder="Enter Cost "
+                            placeholder="Enter Cost"
                             // readOnly={
                             //   formData.source === "Other" ? false : true
                             // }
@@ -1617,7 +1635,7 @@ export default function AddFieldCopyForm() {
                             name="cost"
                             onChange={(e) => handleInputChange(e, index)}
                             value={formData.cost}
-                            placeholder="Enter Cost "
+                            placeholder="Enter Cost"
                             // readOnly={
                             //   formData.source === "Other" ? false : true
                             // }
@@ -1703,18 +1721,15 @@ export default function AddFieldCopyForm() {
                           />
                         </div>
                         <div className="form-group flex flex-col">
-                          <label htmlFor={`markup-${index}`}>Mark up</label>
+                          <label htmlFor={`markup-other-${index}`}>Mark up</label>
                           <input
-                            type="number"
+                            type="text"
                             className="border-b border-[grey] outline-none w-[180px]"
-                            id={`markup-${index}`}
+                            id={`markup-other-${index}`}
                             name="markup"
-                            placeholder="Enter percent"
+                            placeholder="Enter markUp"
                             onChange={(e) => handleInputChange(e, index)}
-                            value={formData?.markup}
-                            min={0}
-                            max={100}
-                            required
+                            value={formData?.markup ?? formData?.markUp ?? ""}
                           />
                         </div>
                         <div className="form-group flex flex-col">
@@ -1742,8 +1757,13 @@ export default function AddFieldCopyForm() {
                             className="border-b border-[grey] outline-none w-[180px]"
                             id={`totalPrice-other-${index}`}
                             name="totalPrice"
-                            placeholder="Total price goes here..."
-                            value={formData.totalPrice}
+                            placeholder="Total price goes here"
+                            value={
+                              formData.totalPrice === 0 ||
+                              formData.totalPrice === "0"
+                                ? ""
+                                : formData.totalPrice ?? ""
+                            }
                             readOnly
                             min={0}
                             step="any"
@@ -1805,8 +1825,13 @@ export default function AddFieldCopyForm() {
                           className="border-b border-[grey] outline-none"
                           id={`totalPrice-${index}`}
                           name="totalPrice"
-                          placeholder="Total price goes here..."
-                          value={formData.totalPrice}
+                          placeholder="Total price goes here"
+                          value={
+                            formData.totalPrice === 0 ||
+                            formData.totalPrice === "0"
+                              ? ""
+                              : formData.totalPrice ?? ""
+                          }
                           onChange={(e) => handleInputChange(e, index)}
                           required
                         />

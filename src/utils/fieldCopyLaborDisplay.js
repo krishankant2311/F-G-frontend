@@ -1,9 +1,19 @@
+import { materialNameBaseForEdit } from "./materialReference";
+
 /** Normalize job type for loose matching (Pick up/Delivery vs PICK UP/DELIVERY). */
 export function normalizeJobTypeKey(value) {
   return String(value ?? "")
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]/g, "");
+}
+
+/** DESCRIPTION / Work Summary — labor label without trailing vendor suffix. */
+function laborPdfDescriptionFromItem(item) {
+  if (!item) return "";
+  const ref = String(item.reference || item.description || "").trim();
+  if (!ref) return "";
+  return materialNameBaseForEdit(ref, item.vendorName || item.vendor);
 }
 
 /** First field-copy line with source Labor for this job type. */
@@ -31,15 +41,19 @@ export function hasLaborSourceLineForJobType(items, jobType) {
  */
 export function getLaborPdfDescription({ labor, groupItems, fieldCopies }) {
   const fromGroup = findLaborSourceLine(groupItems, labor?.jobType);
-  if (fromGroup?.reference) return fromGroup.reference;
-  if (fromGroup?.description) return fromGroup.description;
+  if (fromGroup) {
+    const label = laborPdfDescriptionFromItem(fromGroup);
+    if (label) return label;
+  }
 
   const fromFlat = findLaborSourceLine(fieldCopies, labor?.jobType);
-  if (fromFlat?.reference) return fromFlat.reference;
-  if (fromFlat?.description) return fromFlat.description;
+  if (fromFlat) {
+    const label = laborPdfDescriptionFromItem(fromFlat);
+    if (label) return label;
+  }
 
-  if (labor?.reference) return labor.reference;
-  if (labor?.description) return labor.description;
+  const fromLabor = laborPdfDescriptionFromItem(labor);
+  if (fromLabor) return fromLabor;
 
   const jt = String(labor?.jobType || "").trim();
   return jt ? `${jt} LABOR` : "LABOR";
@@ -92,6 +106,83 @@ export function shouldSkipAggregatedLaborPdfRow(labor, groupItems, fieldCopies) 
     hasLaborSourceLineForJobType(groupItems, labor?.jobType) ||
     hasLaborSourceLineForJobType(fieldCopies, labor?.jobType)
   );
+}
+
+function jobTypeKeysForCrewLaborMatch(value) {
+  const s = String(value ?? "").trim();
+  if (!s) return [];
+  const keys = new Set();
+  const nk = normalizeJobTypeKey(s);
+  if (nk) keys.add(nk);
+  const withoutLabor = s.replace(/\s+LABOR\s*$/i, "").trim();
+  const nk2 = normalizeJobTypeKey(withoutLabor);
+  if (nk2) keys.add(nk2);
+  return [...keys];
+}
+
+/** Crew blocks whose job type matches a table line (e.g. DRAINAGE / DRAINAGE LABOR). */
+export function crewLaborSourcesMatchJobType(crewSources, jobTypeLabel) {
+  if (!Array.isArray(crewSources) || !jobTypeLabel) return [];
+  const targetKeys = jobTypeKeysForCrewLaborMatch(jobTypeLabel);
+  if (!targetKeys.length) return [];
+  return crewSources.filter((crew) => {
+    const crewJt =
+      resolveFieldCopyDisplayJobType({ jobType: crew?.jobType }) ||
+      String(crew?.jobType || "").trim();
+    const crewKeys = jobTypeKeysForCrewLaborMatch(crewJt);
+    return targetKeys.some((tk) =>
+      crewKeys.some((ck) => ck === tk || ck.includes(tk) || tk.includes(ck))
+    );
+  });
+}
+
+/**
+ * Field Copy PDF service table — hide merged hourly labor line when per-crew
+ * rows (possibly different rates) will render instead.
+ */
+export function shouldHideFieldCopyPdfTableItemForCrewBreakdown(
+  item,
+  crewLaborSources,
+  crewManHours
+) {
+  if (!item || !Array.isArray(crewLaborSources) || crewLaborSources.length === 0) {
+    return false;
+  }
+  if (isContractorSourceLaborSummaryRow(item)) return false;
+  if (isLumpSumLaborFieldCopyItem(item)) return false;
+
+  const candidateLabels = [
+    item?.jobType,
+    item?.type,
+    item?.reference,
+    item?.description,
+  ].filter(Boolean);
+
+  let matchedCrew = [];
+  for (const label of candidateLabels) {
+    matchedCrew = crewLaborSourcesMatchJobType(crewLaborSources, label);
+    if (matchedCrew.length > 0) break;
+  }
+  if (matchedCrew.length === 0) return false;
+
+  const isHourlyCrewLine =
+    item?.source === "Labor" || isFieldCopyLaborContext(item);
+  if (!isHourlyCrewLine) return false;
+
+  if (matchedCrew.length > 1) return true;
+
+  const totalCrewHours = matchedCrew.reduce(
+    (sum, c) => sum + Number(c?.manHours || 0),
+    0
+  );
+  const hours =
+    Number(crewManHours) > 0 ? Number(crewManHours) : totalCrewHours;
+  const qty = Number(item?.quantity);
+  if (hours > 0 && qty > 0 && Math.abs(qty - hours) < 0.01) {
+    return true;
+  }
+
+  return false;
 }
 
 /** Label like "HARDSCAPE LUMP SUM LABOR" — not shown on no-bid office copy table. */
@@ -312,10 +403,48 @@ export function getFieldCopyLineDisplayTotal(item) {
 }
 
 /**
- * Line COST — same as View Office Copy (unit cost × qty; else price ÷ 2 × qty).
+ * Line COST — Field Copy: Office Copy formula, plus sell-total ÷ 2 when only totalPrice exists.
  */
 export function getFieldCopyLineDisplayCost(item) {
-  return getOfficeFieldCopyLineCost(item);
+  if (!item) return 0;
+  const base = getOfficeFieldCopyLineCost(item);
+  if (base > 0) return base;
+
+  const storedLineCost = Number(item?.totalCost);
+  if (storedLineCost > 0 && !Number.isNaN(storedLineCost)) {
+    return storedLineCost;
+  }
+
+  if (isFieldCopySellTotalOnlyLine(item)) {
+    const sellTotal = getOfficeFieldCopyLineTotal(item);
+    if (sellTotal > 0) {
+      return Math.round((sellTotal / 2) * 100) / 100;
+    }
+  }
+
+  return 0;
+}
+
+/** Field Copy — row has sell total but no unit cost/price to derive COST from. */
+function isFieldCopySellTotalOnlyLine(item) {
+  if (!item) return false;
+  if (officeUnitCost(item) != null || officeUnitPrice(item) != null) return false;
+  if (isLumpSumFieldCopySource(item?.source)) return true;
+  if (isLineTotalAsPriceColumnSource(item)) return true;
+  const sell = Number(item?.totalPrice) || 0;
+  return sell > 0;
+}
+
+/** Field Copy PDF / download table — COST uses Field Copy line cost rules. */
+export function getFieldCopyPdfRowCalculations(item) {
+  const row = getOfficeFieldCopyRowCalculations(item);
+  const lineCost = getFieldCopyLineDisplayCost(item);
+  let markupVal = row.markupVal;
+  if (lineCost > 0 && Number(row.displayTotal) > 0) {
+    markupVal =
+      Math.round(((Number(row.displayTotal) / lineCost - 1) * 100) * 100) / 100;
+  }
+  return { ...row, lineCost, markupVal };
 }
 
 function officeLineQty(item) {
@@ -674,13 +803,89 @@ export function getFieldCopyDownloadCrewLaborRowFields(
   formDataJobType,
   resolveRateForJobType
 ) {
-  return getOfficeFieldCopyCrewLaborRowFields(
+  const row = getOfficeFieldCopyCrewLaborRowFields(
     labor,
     laborManHoursByJobType,
     laborHourlyRateByJobType,
     formDataJobType,
     resolveRateForJobType
   );
+  return applyFieldCopyPdfCrewLaborCostDisplay(row, labor);
+}
+
+/**
+ * Raw crew block — internal line cost from backend when stored separately from sell.
+ */
+export function resolveFieldCopyCrewBackendLineCostFromRaw(raw) {
+  if (!raw) return null;
+  if (Number(raw.internalLineCost) > 0) return Number(raw.internalLineCost);
+  if (Number(raw.lineInternalCost) > 0) return Number(raw.lineInternalCost);
+  if (Number(raw.fieldCopyBackendLineCost) > 0) {
+    return Number(raw.fieldCopyBackendLineCost);
+  }
+
+  const sellRate = Number(raw.jobTypeCost) || 0;
+  const rawUnitCost = Number(raw.cost) || 0;
+  const manHours = Number(raw.manHours) || 0;
+  if (
+    rawUnitCost > 0 &&
+    sellRate > 0 &&
+    Math.abs(rawUnitCost - sellRate) > 0.001 &&
+    manHours > 0
+  ) {
+    return Math.round(rawUnitCost * manHours * 100) / 100;
+  }
+
+  const sellTotal = Number(raw.totalPrice) || 0;
+  const storedTotal = Number(raw.totalCost) || 0;
+  if (sellTotal > 0 && storedTotal > 0 && Math.abs(sellTotal - storedTotal) > 0.01) {
+    return storedTotal;
+  }
+
+  return null;
+}
+
+function resolveFieldCopyPdfCrewBackendLineCost(labor, row) {
+  if (Number(labor?.fieldCopyBackendLineCost) > 0) {
+    return Number(labor.fieldCopyBackendLineCost);
+  }
+  return resolveFieldCopyCrewBackendLineCostFromRaw(labor);
+}
+
+/**
+ * Field Copy PDF crew hours — COST column only.
+ * Backend internal cost when present; else (PRICE ÷ 2) × QTY (100% markup).
+ */
+export function applyFieldCopyPdfCrewLaborCostDisplay(row, labor) {
+  if (!row) return row;
+
+  let lineCost = resolveFieldCopyPdfCrewBackendLineCost(labor, row);
+  const displayTotal = Number(row.displayTotal) || 0;
+  const manHours = Number(row.manHours) || 0;
+  const displayPrice = Number(row.displayPrice) || 0;
+
+  if (!(lineCost > 0)) {
+    if (displayTotal > 0) {
+      lineCost = Math.round((displayTotal / 2) * 100) / 100;
+    } else if (manHours > 0 && displayPrice > 0) {
+      lineCost = Math.round((displayPrice / 2) * manHours * 100) / 100;
+    } else {
+      lineCost = Number(row.lineCost) || 0;
+    }
+  }
+
+  let markupVal = labor?.markup ?? labor?.markUp ?? row.markupVal ?? null;
+  if (lineCost > 0 && displayTotal > 0) {
+    markupVal = Math.round(((displayTotal / lineCost - 1) * 100) * 100) / 100;
+  }
+
+  return {
+    ...row,
+    lineCost,
+    markupVal,
+    displayTotal,
+    displayPrice,
+  };
 }
 
 /**
@@ -812,6 +1017,86 @@ export function formatFieldCopyAmount(value) {
   return Number(value).toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
+  });
+}
+
+function formatFieldCopyCrewQtyText(manHours) {
+  const mh = Number(manHours);
+  if (!(mh > 0) || Number.isNaN(mh)) return "";
+  return Number.isInteger(mh)
+    ? String(mh)
+    : mh.toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+}
+
+/**
+ * Field Copy PDF — merge crew labor rows.
+ * Service table: same description + rate (includeRateInKey default true).
+ * Work Summary: same description only (includeRateInKey false).
+ */
+export function mergeFieldCopyPdfCrewLaborRows(entries, options = {}) {
+  const {
+    includeTaxInKey = false,
+    includeRateInKey = true,
+    getTaxLabel,
+  } = options;
+  const groups = new Map();
+
+  for (const entry of entries || []) {
+    if (!entry?.row) continue;
+    const desc = String(entry.row.description || "")
+      .trim()
+      .toUpperCase();
+    const rate = Number(entry.row.displayPrice) || 0;
+    const rateKey = rate > 0 ? rate.toFixed(2) : "0";
+    let key = includeRateInKey ? `${desc}|${rateKey}` : desc;
+    if (includeTaxInKey && typeof getTaxLabel === "function") {
+      key += `|${getTaxLabel(entry.labor)}`;
+    }
+
+    const mh =
+      Number(entry.row.manHours) > 0
+        ? Number(entry.row.manHours)
+        : parseFloat(entry.row.qtyText) || 0;
+    const lc = Number(entry.row.lineCost) || 0;
+    const dt = Number(entry.row.displayTotal) || 0;
+
+    if (!groups.has(key)) {
+      groups.set(key, {
+        labor: entry.labor,
+        row: { ...entry.row, manHours: mh, lineCost: lc, displayTotal: dt },
+      });
+    } else {
+      const g = groups.get(key);
+      g.row.manHours = (Number(g.row.manHours) || 0) + mh;
+      g.row.lineCost = (Number(g.row.lineCost) || 0) + lc;
+      g.row.displayTotal = (Number(g.row.displayTotal) || 0) + dt;
+    }
+  }
+
+  return [...groups.values()].map(({ labor, row }) => {
+    const manHours = Number(row.manHours) || 0;
+    const lineCost = Number(row.lineCost) || 0;
+    const displayTotal = Number(row.displayTotal) || 0;
+    const displayPrice = Number(row.displayPrice) || 0;
+    let markupVal = row.markupVal;
+    if (lineCost > 0 && displayTotal > 0) {
+      markupVal = Math.round(((displayTotal / lineCost - 1) * 100) * 100) / 100;
+    }
+    return {
+      labor,
+      row: {
+        ...row,
+        manHours,
+        qtyText: formatFieldCopyCrewQtyText(manHours),
+        lineCost,
+        displayTotal,
+        displayPrice,
+        markupVal,
+      },
+    };
   });
 }
 

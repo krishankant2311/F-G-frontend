@@ -1,3 +1,12 @@
+import {
+  filterOmittedOtherTreatments,
+  filterOtherTreatmentsForContractTotal,
+  hasValidOtherTreatmentDate,
+  isOmittedFromContractTotal,
+  otherTreatmentLinePrice,
+  resolveOtherTreatmentDate,
+} from "./otherTreatmentCategory";
+
 export const money2 = (n) =>
   Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
@@ -48,6 +57,43 @@ function collectScheduleDates(customer) {
   return dates.filter((d) => !Number.isNaN(d.getTime()));
 }
 
+function isScheduledOtherTreatment(ot) {
+  return hasValidOtherTreatmentDate(resolveOtherTreatmentDate(ot));
+}
+
+function isCompletedTreatment(status) {
+  return (status || "").toString().trim().toLowerCase() === "completed";
+}
+
+/** Scheduled other treatments included in contract / billing summary totals. */
+export function sumScheduledOtherTreatmentsAmount(otherTreatments = []) {
+  return money2(
+    filterOtherTreatmentsForContractTotal(otherTreatments)
+      .filter(isScheduledOtherTreatment)
+      .reduce((sum, ot) => sum + otherTreatmentLinePrice(ot), 0)
+  );
+}
+
+/** Completed other treatments included in materials-used totals. */
+export function sumCompletedOtherTreatmentsAmount(otherTreatments = []) {
+  return money2(
+    filterOtherTreatmentsForContractTotal(otherTreatments)
+      .filter((ot) => isCompletedTreatment(ot.status))
+      .reduce((sum, ot) => sum + otherTreatmentLinePrice(ot), 0)
+  );
+}
+
+/** Omitted other treatments listed separately on billing summary (scheduled only). */
+export function listOmittedOtherTreatmentsForBilling(otherTreatments = []) {
+  return filterOmittedOtherTreatments(otherTreatments)
+    .filter(isScheduledOtherTreatment)
+    .map((ot) => ({
+      treatment:
+        ot.treatment || ot.mixName || ot.treatmentName || "-",
+      amount: otherTreatmentLinePrice(ot),
+    }));
+}
+
 /** Same billing math as Usage and Billing Summary (ClientReconcile). */
 export function summarizeChemicalCustomer(customer) {
   const annualTreatments = customer?.annualTreatments || [];
@@ -57,33 +103,15 @@ export function summarizeChemicalCustomer(customer) {
     .filter((at) => at.scheduleDate)
     .reduce((sum, at) => sum + Number(at.price || 0), 0);
 
-  const scheduledOtherAmount = otherTreatments
-    .filter((ot) => ot.date)
-    .reduce((sum, ot) => {
-      const qty = Number(ot.qty || 0);
-      const pricePerTank = Number(ot.totalPricePerTank || 0);
-      return sum + qty * pricePerTank;
-    }, 0);
+  const scheduledOtherAmount = sumScheduledOtherTreatmentsAmount(otherTreatments);
 
   const annualProgramTotal = money2(scheduledAnnualAmount + scheduledOtherAmount);
 
   const completedAnnualAmount = annualTreatments
-    .filter(
-      (at) =>
-        (at.status || "").toString().trim().toLowerCase() === "completed"
-    )
+    .filter((at) => isCompletedTreatment(at.status))
     .reduce((sum, at) => sum + Number(at.price || 0), 0);
 
-  const completedOtherAmount = otherTreatments
-    .filter(
-      (ot) =>
-        (ot.status || "").toString().trim().toLowerCase() === "completed"
-    )
-    .reduce((sum, ot) => {
-      const qty = Number(ot.qty || 0);
-      const pricePerTank = Number(ot.totalPricePerTank || 0);
-      return sum + qty * pricePerTank;
-    }, 0);
+  const completedOtherAmount = sumCompletedOtherTreatmentsAmount(otherTreatments);
 
   const contractTotalRaw = customer?.contractTotal;
   const contractTotalAmount =
@@ -147,6 +175,7 @@ export function summarizeChemicalCustomer(customer) {
     planYear: planYear || null,
     isLowBalance: remainingAmount >= 0 && remainingAmount < 50,
     isNegativeBalance: remainingAmount < 0,
+    omittedOtherTreatments: listOmittedOtherTreatmentsForBilling(otherTreatments),
   };
 }
 
@@ -160,3 +189,5 @@ export function buildChemicalCustomerNavState(customer) {
     otherTreatments: customer.otherTreatments || [],
   };
 }
+
+export { isOmittedFromContractTotal };

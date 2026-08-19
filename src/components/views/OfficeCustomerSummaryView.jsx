@@ -6,9 +6,9 @@ import { useTableContext } from "../../context/TableContext";
 import {
   downloadCustomerSummaryCsv,
   formatProjectDate,
-  formatSummaryDescription,
   formatSummaryMoney,
   loadRecentCustomerSearches,
+  resolveSummaryJobName,
   saveRecentCustomerSearch,
   summarizeLatestCustomerCopyBoth,
 } from "../../utils/customerSummaryPricing";
@@ -118,7 +118,7 @@ function CustomerSummaryBlock({ customer, onRemove }) {
         return {
           id: project._id,
           projectCode: project.projectCode || "-",
-          description: formatSummaryDescription(project.description),
+          jobName: resolveSummaryJobName(project),
           ...pricing,
           startDate: formatProjectDate(project.projectStartDate),
           startDateRaw: project.projectStartDate,
@@ -197,7 +197,7 @@ function CustomerSummaryBlock({ customer, onRemove }) {
             <tr className="text-center">
               <th className="border border-black p-2 font-bold">PROJECT</th>
               <th className="border border-black p-2 font-bold min-w-[280px]">
-                DESCRIPTION
+                JOB NAME
               </th>
               {costMode && (
                 <th className="border border-black p-2 font-bold">MATERIAL COST</th>
@@ -235,7 +235,7 @@ function CustomerSummaryBlock({ customer, onRemove }) {
               rows.map((row) => (
                 <tr key={row.id} className="text-center">
                   <td className="border border-black p-2">{row.projectCode}</td>
-                  <td className="border border-black p-2 text-left">{row.description}</td>
+                  <td className="border border-black p-2 text-left">{row.jobName}</td>
                   {costMode && (
                     <td className="border border-black p-2">
                       {formatSummaryMoney(row.materialCost)}

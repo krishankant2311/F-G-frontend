@@ -266,12 +266,13 @@ import "react-toastify/dist/ReactToastify.css";
 import { useTableContext } from "../../../context/TableContext";
 import { useNavigate } from "react-router-dom";
 import JoditEditor from "jodit-react";
+import { applyMaterialFormPricing } from "../../../utils/materialPricingDisplay";
 export default function AddMaterialForm() {
   const [formData, setFormData] = useState({
     name: "",
     description: "",
     cost: "",
-    markUp: "",
+    markUp: "100",
     measure: "",
     price: "",
     isTaxable: true,
@@ -307,15 +308,20 @@ export default function AddMaterialForm() {
     }
     if (e.target.name === "price") {
       const val = e.target.value;
-      if (val < 0) {
+      if (val !== "" && parseFloat(val) < 0) {
         toast.error("Price cannot be negative.");
         return;
       }
     }
-    setFormData({
+    const name = e.target.name;
+    let next = {
       ...formData,
-      [e.target.name]: e.target.value,
-    });
+      [name]: e.target.value,
+    };
+    if (name === "cost" || name === "markUp" || name === "price") {
+      next = applyMaterialFormPricing(next, name);
+    }
+    setFormData(next);
   };
   function containsNumberOrSpecialChar(text) {
     // Regular expression to check for numbers (0-9) or special characters

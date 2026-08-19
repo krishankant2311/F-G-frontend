@@ -691,6 +691,16 @@ export default function AddCustomer() {
       return;
     }
 
+    if (field === "omitFromContractTotal") {
+      const updatedRows = [...rows];
+      updatedRows[index] = {
+        ...updatedRows[index],
+        omitFromContractTotal: Boolean(value),
+      };
+      setRows(updatedRows);
+      return;
+    }
+
     const updatedRows = [...rows];
     updatedRows[index][field] =
       field === "qty" ? normalizeQuantityInput(value) : value;
@@ -1007,11 +1017,12 @@ export default function AddCustomer() {
 
                 <table className="w-full border border-gray-300 table-fixed">
                   <colgroup>
-                    <col style={{ width: "60%" }} />
+                    <col style={{ width: "50%" }} />
                     <col style={{ width: "7%" }} />
-                    <col style={{ width: "15%" }} />
+                    <col style={{ width: "13%" }} />
                     <col style={{ width: "6%" }} />
                     <col style={{ width: "6%" }} />
+                    <col style={{ width: "12%" }} />
                     <col style={{ width: "6%" }} />
                   </colgroup>
                   <thead className="bg-[#00613e] text-white">
@@ -1021,6 +1032,7 @@ export default function AddCustomer() {
                       <th className="p-2 border">SCHEDULE DATE</th>
                       <th className="p-2 border">COST</th>
                       <th className="p-2 border">PRICE</th>
+                      <th className="p-2 border text-xs leading-tight">OMIT FROM CONTRACT TOTAL</th>
                       <th className="p-2 border">ACTION</th>
                     </tr>
                   </thead>
@@ -1183,6 +1195,22 @@ export default function AddCustomer() {
                           />
                         </td>
 
+                        {/* Omit from contract total */}
+                        <td className="border p-2 text-center align-middle">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(row.omitFromContractTotal)}
+                            onChange={(e) =>
+                              handleRowChange(
+                                index,
+                                "omitFromContractTotal",
+                                e.target.checked
+                              )
+                            }
+                            title="Omit from contract total"
+                          />
+                        </td>
+
                         {/* Actions */}
                         <td className="border p-2 align-middle">
                           <div className="flex items-center justify-center gap-2">
@@ -1218,11 +1246,12 @@ export default function AddCustomer() {
 
                 <table className="w-full border border-gray-300 table-fixed">
                   <colgroup>
-                    <col style={{ width: "60%" }} />
+                    <col style={{ width: "50%" }} />
                     <col style={{ width: "7%" }} />
-                    <col style={{ width: "15%" }} />
+                    <col style={{ width: "13%" }} />
                     <col style={{ width: "6%" }} />
                     <col style={{ width: "6%" }} />
+                    <col style={{ width: "12%" }} />
                     <col style={{ width: "6%" }} />
                   </colgroup>
                   <thead className="bg-[#00613e] text-white">
@@ -1232,6 +1261,7 @@ export default function AddCustomer() {
                       <th className="p-2 border">SCHEDULE DATE</th>
                       <th className="p-2 border">COST</th>
                       <th className="p-2 border">PRICE</th>
+                      <th className="p-2 border text-xs leading-tight">OMIT FROM CONTRACT TOTAL</th>
                       <th className="p-2 border">ACTION</th>
                     </tr>
                   </thead>
@@ -1381,7 +1411,21 @@ export default function AddCustomer() {
                                 handleChemicalRowChange(index, "price", e.target.value)
                               }
                               className="w-full border px-2 py-1"
-                              placeholder="0.00"
+                            placeholder="0.00"
+                          />
+                          </td>
+                          <td className="border p-2 text-center align-middle">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(row.omitFromContractTotal)}
+                              onChange={(e) =>
+                                handleChemicalRowChange(
+                                  index,
+                                  "omitFromContractTotal",
+                                  e.target.checked
+                                )
+                              }
+                              title="Omit from contract total"
                             />
                           </td>
                           <td className="border p-2 align-middle">

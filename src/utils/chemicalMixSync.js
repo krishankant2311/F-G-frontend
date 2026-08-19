@@ -262,3 +262,76 @@ export function buildAddChemicalPayload(item) {
     isTaxable: false,
   };
 }
+
+/** Load every active chemical (API caps each page at 100). */
+export async function fetchAllMasterChemicals(apiBase, token, axiosClient) {
+  const limit = 100;
+  let page = 1;
+  let totalPages = 1;
+  const all = [];
+
+  while (page <= totalPages) {
+    const res = await axiosClient.get(
+      `${apiBase}/chemical-maintenance/get-all-chemical`,
+      {
+        headers: { token },
+        params: {
+          page,
+          limit,
+          sortby: "chemicalName",
+          sortorder: 1,
+        },
+      }
+    );
+
+    if (res.data?.statusCode !== 200) {
+      throw new Error(res.data?.message || "Failed to load chemicals");
+    }
+
+    const { chemicals = [], totalPages: tp = 1 } = res.data.result || {};
+    all.push(...chemicals);
+    totalPages = tp;
+    page += 1;
+  }
+
+  return all;
+}
+
+function masterMatchesCandidate(master, candidate) {
+  const key = normalizeChemicalKey(candidate);
+  if (!key) return false;
+  return (
+    master.chemicalName === candidate ||
+    master.brandName === candidate ||
+    normalizeChemicalKey(master.chemicalName) === key ||
+    normalizeChemicalKey(master.brandName) === key
+  );
+}
+
+/** Map a saved mix line to the master-list chemicalName for the dropdown. */
+export function resolveMixLineChemicalOptionName(line, masterChemicals = []) {
+  const candidates = [
+    line?.chemicalName,
+    line?.brandName,
+    resolveMasterChemicalNameFromMixLine(line),
+  ]
+    .map((v) => String(v ?? "").trim())
+    .filter(Boolean);
+
+  const seen = new Set();
+  for (const cand of candidates) {
+    if (seen.has(cand)) continue;
+    seen.add(cand);
+
+    const exact = masterChemicals.find((c) => masterMatchesCandidate(c, cand));
+    if (exact?.chemicalName) return exact.chemicalName;
+  }
+
+  return candidates[0] || "";
+}
+
+export function findMasterChemicalByName(name, masterChemicals = []) {
+  const trimmed = String(name ?? "").trim();
+  if (!trimmed) return null;
+  return masterChemicals.find((c) => masterMatchesCandidate(c, trimmed)) || null;
+}

@@ -4,8 +4,12 @@ import { useTableContext } from "../../../../../context/TableContext";
 import axios from "axios";
 import { toast } from "react-toastify";
 import { buildCustomerWithTreatments } from "../Dashboard/Treatment";
-
-const money2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+import {
+  listOmittedOtherTreatmentsForBilling,
+  money2,
+  sumCompletedOtherTreatmentsAmount,
+  sumScheduledOtherTreatmentsAmount,
+} from "../../../../../utils/chemicalCustomerSummary";
 
 const CustomerClientReconcile = () => {
   const { customerId: paramCustomerId } = useParams();
@@ -90,28 +94,18 @@ const CustomerClientReconcile = () => {
     .filter((at) => at.scheduleDate)
     .reduce((sum, at) => sum + Number(at.price || 0), 0);
 
-  const scheduledOtherAmount = otherTreatments
-    .filter((ot) => ot.date)
-    .reduce((sum, ot) => {
-      const qty = Number(ot.qty || 0);
-      const pricePerTank = Number(ot.totalPricePerTank || 0);
-      return sum + (qty * pricePerTank);
-    }, 0);
+  const scheduledOtherAmount = sumScheduledOtherTreatmentsAmount(otherTreatments);
 
   const annualProgramTotal = scheduledAnnualAmount + scheduledOtherAmount;
 
-  // UP TO DATE CHEMICAL MATERIALS USED = only treatments whose status is "Completed"
+  // UP TO DATE CHEMICAL MATERIALS USED = only completed treatments (omitted other treatments excluded)
   const completedAnnualAmount = annualTreatments
     .filter((at) => (at.status || "").toString().trim().toLowerCase() === "completed")
     .reduce((sum, at) => sum + Number(at.price || 0), 0);
 
-  const completedOtherAmount = otherTreatments
-    .filter((ot) => (ot.status || "").toString().trim().toLowerCase() === "completed")
-    .reduce((sum, ot) => {
-      const qty = Number(ot.qty || 0);
-      const pricePerTank = Number(ot.totalPricePerTank || 0);
-      return sum + (qty * pricePerTank);
-    }, 0);
+  const completedOtherAmount = sumCompletedOtherTreatmentsAmount(otherTreatments);
+
+  const omittedOtherTreatments = listOmittedOtherTreatmentsForBilling(otherTreatments);
 
   const contractTotalRaw = customerData?.contractTotal ?? state?.contractTotal;
   const contractTotalAmount =
@@ -282,6 +276,33 @@ const CustomerClientReconcile = () => {
         {isLowBalance && (
           <div className="mt-4 p-3 border border-red-300 bg-red-50 text-red-700 font-semibold">
             Customer Balance Warning: Annual Remaining Balance is under $50.
+          </div>
+        )}
+
+        {omittedOtherTreatments.length > 0 && (
+          <div className="mt-8">
+            <h3 className="text-lg font-bold mb-2">OTHER TREATMENTS</h3>
+            <p className="text-sm text-gray-600 mb-3">
+              Treatments omitted from contract total (not included in summary above).
+            </p>
+            <table className="w-full border text-center">
+              <thead className="bg-[#00613e] text-white">
+                <tr>
+                  <th className="border p-2">S. No.</th>
+                  <th className="border p-2">TREATMENT NAME</th>
+                  <th className="border p-2">AMOUNT [USD - $]</th>
+                </tr>
+              </thead>
+              <tbody>
+                {omittedOtherTreatments.map((row, index) => (
+                  <tr key={index} className="even:bg-gray-100">
+                    <td className="border p-2">{index + 1}</td>
+                    <td className="border p-2">{row.treatment}</td>
+                    <td className="border p-2">$ {money2(row.amount).toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>

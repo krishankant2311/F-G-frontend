@@ -2,6 +2,7 @@ import {
   ensureFgCostFromPrice,
   hydrateOtherFieldCopyFromApi,
   materialNameBaseForEdit,
+  recalcFgFieldCopyLineTotals,
   recalcLaborGenerateCustomerLine,
 } from "./materialReference";
 
@@ -85,7 +86,7 @@ export function hydrateFormsFromCustomerCopyData(copyLines = []) {
         row.markup = Math.round(((fgPrice - fgCost) / fgCost) * 10000) / 100;
         row.markUp = row.markup;
       }
-      return row;
+      return recalcFgFieldCopyLineTotals(row);
     }
 
     if (form.source === "Other") {

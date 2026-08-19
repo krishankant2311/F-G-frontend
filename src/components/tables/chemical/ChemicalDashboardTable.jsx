@@ -41,6 +41,15 @@ const computeStatus = (status, dateVal) => {
   return s;
 };
 
+const normalizeTreatmentStatus = (status) =>
+  (status || "Scheduled").trim().toLowerCase();
+
+const isCompletedTreatmentRow = (row) =>
+  normalizeTreatmentStatus(row?.status) === "completed";
+
+const isPausedTreatmentRow = (row) =>
+  normalizeTreatmentStatus(row?.status) === "paused";
+
 // Days difference between scheduled date and today (date-only).
 // 0 = today, 1 = tomorrow, -1 = yesterday.
 const dayDiffFromToday = (dateVal) => {
@@ -54,6 +63,9 @@ const dayDiffFromToday = (dateVal) => {
   const ms = a.getTime() - today.getTime();
   return Math.round(ms / (24 * 60 * 60 * 1000));
 };
+
+const getLocalDateOnlyStr = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 // Parse encoded dashboard row id into customerId/type/index/dateIndex
 // Formats:
@@ -136,7 +148,8 @@ const buildTreatmentRowsFromCustomers = (customers) => {
   return rows;
 };
 
-export default function ChemicalDashboardTable() {
+export default function ChemicalDashboardTable({ pageMode = "scheduled" }) {
+  const isCompletedPage = pageMode === "completed";
   const { pageNo } = useParams();
   const [data, setData] = useState([]);
   const [allTreatmentRows, setAllTreatmentRows] = useState([]);
@@ -152,8 +165,10 @@ export default function ChemicalDashboardTable() {
   const [disableBtn, setDisableBtn] = useState(false);
   const [deletedId, setDeletedId] = useState("");
   const [perPageRecords, setPerPageRecords] = useState(10);
-  /** all = current dashboard (next 14 days + overdue); upcoming = today onward; past = before today; completed / paused = by status */
-  const [scheduleFilter, setScheduleFilter] = useState("all");
+  /** all = next 14 days + overdue (excludes completed/paused); completed / paused = by status */
+  const [scheduleFilter, setScheduleFilter] = useState(
+    isCompletedPage ? "completed" : "all",
+  );
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editData, setEditData] = useState(null);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -338,6 +353,10 @@ export default function ChemicalDashboardTable() {
       const newQuantity = parseFloat(updatedData.quantity) || 0;
       const newPrice = parseFloat(updatedData.price) || 0;
       const newProjectCode = updatedData.projectCode !== undefined && updatedData.projectCode !== null ? String(updatedData.projectCode).trim() : undefined;
+      const rescheduleOverdue =
+        item?.status === "Overdue" &&
+        updatedData.scheduledDate &&
+        updatedData.scheduledDate >= getLocalDateOnlyStr();
 
       const payload = {
         customerName: customer.customerName,
@@ -367,6 +386,7 @@ export default function ChemicalDashboardTable() {
             updated.quantity = newQuantity;
             updated.price = newPrice;
             if (newProjectCode !== undefined) updated.projectCode = newProjectCode;
+            if (rescheduleOverdue) updated.status = "Scheduled";
             // Recalculate cost if unitCost exists
             if (t.unitCost && newQuantity > 0) {
               updated.cost = t.unitCost * newQuantity;
@@ -382,6 +402,7 @@ export default function ChemicalDashboardTable() {
             updated.qty = newQuantity;
             updated.totalPricePerTank = newPrice;
             if (newProjectCode !== undefined) updated.projectCode = newProjectCode;
+            if (rescheduleOverdue) updated.status = "Scheduled";
             // Recalculate cost if unitCost exists
             if (t.unitCost && newQuantity > 0) {
               updated.totalCostPerTank = t.unitCost * newQuantity;
@@ -533,24 +554,32 @@ export default function ChemicalDashboardTable() {
 
     if (scheduleFilter === "all") {
       filtered = withDiff.filter(
-        (row) => row.__dayDiff != null && row.__dayDiff <= 14,
+        (row) =>
+          row.__dayDiff != null &&
+          row.__dayDiff <= 14 &&
+          !isCompletedTreatmentRow(row) &&
+          !isPausedTreatmentRow(row),
       );
     } else if (scheduleFilter === "upcoming") {
       filtered = withDiff.filter(
-        (row) => row.__dayDiff != null && row.__dayDiff >= 0,
+        (row) =>
+          row.__dayDiff != null &&
+          row.__dayDiff >= 0 &&
+          !isCompletedTreatmentRow(row) &&
+          !isPausedTreatmentRow(row),
       );
     } else if (scheduleFilter === "past") {
       filtered = withDiff.filter(
-        (row) => row.__dayDiff != null && row.__dayDiff < 0,
+        (row) =>
+          row.__dayDiff != null &&
+          row.__dayDiff < 0 &&
+          !isCompletedTreatmentRow(row) &&
+          !isPausedTreatmentRow(row),
       );
     } else if (scheduleFilter === "completed") {
-      filtered = withDiff.filter(
-        (row) => (row.status || "").trim().toLowerCase() === "completed",
-      );
+      filtered = withDiff.filter((row) => isCompletedTreatmentRow(row));
     } else if (scheduleFilter === "paused") {
-      filtered = withDiff.filter(
-        (row) => (row.status || "").trim().toLowerCase() === "paused",
-      );
+      filtered = withDiff.filter((row) => isPausedTreatmentRow(row));
     }
 
     // Sorting (frontend) – like CHEMICALS / MANAGE CUSTOMERS
@@ -587,8 +616,13 @@ export default function ChemicalDashboardTable() {
         return 0;
       });
     } else {
-      // Default dashboard order
+      // Default dashboard order (completed page: most recent first)
       filtered.sort((a, b) => {
+        if (isCompletedPage) {
+          const ad = new Date(a.scheduledDateRaw || 0).getTime();
+          const bd = new Date(b.scheduledDateRaw || 0).getTime();
+          return bd - ad;
+        }
         const ad = a.__dayDiff;
         const bd = b.__dayDiff;
         const aUpcoming = ad >= 0;
@@ -617,6 +651,7 @@ export default function ChemicalDashboardTable() {
     sortBy,
     sortOrder,
     scheduleFilter,
+    isCompletedPage,
   ]);
 
   const searchProjects = async () => {
@@ -752,7 +787,9 @@ export default function ChemicalDashboardTable() {
         <div className="px-4 py-3 flex justify-between items-end border-b">
           {/* <h3 className="card-title">Bid Projects</h3> */}
           <div className="flex justify-center flex-grow">
-            <h3 className="text-lg font-bold">Scheduled Application Dashboard</h3>
+            <h3 className="text-lg font-bold">
+              {isCompletedPage ? "Completed Treatment" : "Scheduled Application Dashboard"}
+            </h3>
           </div>
           {/* <div className="text-end">
             <input
@@ -780,21 +817,22 @@ export default function ChemicalDashboardTable() {
               <option value={40}>40</option>
               <option value={50}>50</option>
             </select>
-            <select
-              aria-label="Filter by schedule or status"
-              value={scheduleFilter}
-              onChange={(e) => {
-                setScheduleFilter(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="min-w-[180px] border p-1 relative top-1 mr-2 outline-none cursor-pointer h-[34px] text-sm"
-            >
-              <option value="all">All (default)</option>
-              <option value="upcoming">Schedule dates</option>
-              <option value="past">Past dates</option>
-              <option value="completed">Complete treatment</option>
-              <option value="paused">Paused treatment</option>
-            </select>
+            {!isCompletedPage ? (
+              <select
+                aria-label="Filter by schedule or status"
+                value={scheduleFilter}
+                onChange={(e) => {
+                  setScheduleFilter(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="min-w-[180px] border p-1 relative top-1 mr-2 outline-none cursor-pointer h-[34px] text-sm"
+              >
+                <option value="all">All (default)</option>
+                <option value="upcoming">Schedule dates</option>
+                <option value="past">Past dates</option>
+                <option value="paused">Paused treatment</option>
+              </select>
+            ) : null}
             <input
               type="text"
               placeholder="Search"
@@ -813,46 +851,50 @@ export default function ChemicalDashboardTable() {
               <i className="fa fa-plus mr-2"></i>
               Create New Bid
             </button> */}
-            <button
-              className={`btn bg-[#00613e] text-white text-sm relative top-1 ${
-                disableBtn ? "disabled" : ""
-              }`}
-              onClick={() => {
-                navigate(
-                  "/panel/office/chemical-maintenance/treatment?status=Completed",
-                );
-              }}
-            >
-              <i className="fa fa-plus mr-2"></i>
-              TREATMENT COMPLETED
-            </button>
+            {!isCompletedPage ? (
+              <>
+                <button
+                  className={`btn bg-[#00613e] text-white text-sm relative top-1 ${
+                    disableBtn ? "disabled" : ""
+                  }`}
+                  onClick={() => {
+                    navigate(
+                      "/panel/office/chemical-maintenance/completed-treatments",
+                    );
+                  }}
+                >
+                  <i className="fa fa-plus mr-2"></i>
+                  TREATMENT COMPLETED
+                </button>
 
-            <button
-              className={`btn bg-[#00613e] text-white text-sm relative top-1 ${
-                disableBtn ? "disabled" : ""
-              }`}
-              onClick={() => {
-                navigate(
-                  "/panel/office/chemical-maintenance/treatment?status=Overdue",
-                );
-              }}
-            >
-              <i className="fa fa-plus mr-2"></i>
-              OVERDUE
-            </button>
-            <button
-              className={`btn bg-[#00613e] text-white text-sm relative top-1 ${
-                disableBtn ? "disabled" : ""
-              }`}
-              onClick={() => {
-                navigate(
-                  "/panel/office/chemical-maintenance/treatment?status=Paused",
-                );
-              }}
-            >
-              <i className="fa fa-plus mr-2"></i>
-              PAUSED
-            </button>
+                <button
+                  className={`btn bg-[#00613e] text-white text-sm relative top-1 ${
+                    disableBtn ? "disabled" : ""
+                  }`}
+                  onClick={() => {
+                    navigate(
+                      "/panel/office/chemical-maintenance/treatment?status=Overdue",
+                    );
+                  }}
+                >
+                  <i className="fa fa-plus mr-2"></i>
+                  OVERDUE
+                </button>
+                <button
+                  className={`btn bg-[#00613e] text-white text-sm relative top-1 ${
+                    disableBtn ? "disabled" : ""
+                  }`}
+                  onClick={() => {
+                    navigate(
+                      "/panel/office/chemical-maintenance/treatment?status=Paused",
+                    );
+                  }}
+                >
+                  <i className="fa fa-plus mr-2"></i>
+                  PAUSED
+                </button>
+              </>
+            ) : null}
           </div>
         </div>
         <div className="card-body overflow-x-auto">

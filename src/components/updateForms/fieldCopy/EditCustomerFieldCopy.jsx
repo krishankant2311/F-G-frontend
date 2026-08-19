@@ -13,6 +13,7 @@ import {
   normalizeLaborLumpSumEditableAmount,
   recalcFgFieldCopyLineTotals,
   syncFgCostPriceOnUserEdit,
+  syncFgLineFromMarkupEdit,
   getMaterialNameInputValue,
   hydrateOtherFieldCopyFromApi,
   materialNameBaseForEdit,
@@ -122,8 +123,30 @@ export default function EditCustomerFieldCopy() {
       }
     } catch (error) {
       console.error(error);
-      toast.error(error.response.message);
+      toast.error(error.response?.data?.message || error.message || "Something went wrong");
     }
+  };
+
+  const flattenActiveFieldCopyLines = (project) => {
+    const lines = [];
+    const pushGroups = (entries, groupKey) => {
+      if (!Array.isArray(entries)) return;
+      for (const entry of entries) {
+        for (const g of entry?.[groupKey] || []) {
+          for (const c of g?.copies || []) {
+            if (String(c?.status || "") !== "Active") continue;
+            lines.push({
+              ...c,
+              type: c.type || g.jobType || c.jobType,
+              jobType: g.jobType || c.jobType || c.type,
+            });
+          }
+        }
+      }
+    };
+    pushGroups(project?.officeFieldCopy, "fieldCopies");
+    pushGroups(project?.draftCopy, "draftCopies");
+    return lines;
   };
 
   const getCustomerFieldCopyData = async () => {
@@ -133,15 +156,30 @@ export default function EditCustomerFieldCopy() {
         token: token,
         "Content-Type": "application/json",
       };
-      const response = await axios.get(
-        `${process.env.REACT_APP_API_BASE_URL}/project/get-office-field-copy/${id}`,
-        { headers: headers }
-      );
-      if (response.data.statusCode === 200) {
-        const resultedCopies = [
-          ...response.data.result.officeFieldCopies,
-          ...response.data.result.officeDraftCopies,
-        ];
+      const [officeRes, projectRes] = await Promise.all([
+        axios.get(
+          `${process.env.REACT_APP_API_BASE_URL}/project/get-office-field-copy/${id}`,
+          { headers }
+        ),
+        axios.get(
+          `${process.env.REACT_APP_API_BASE_URL}/project/get-project/${id}`,
+          { headers }
+        ),
+      ]);
+      if (officeRes.data.statusCode === 200) {
+        // Flatten Active office/draft copies from project (unmerged) so Generate
+        // autofill keeps each Source=Labor PICK UP/DELIVERY line separate.
+        // get-office-field-copy may merge pickups before returning.
+        const projectDoc =
+          projectRes.data?.statusCode === 200 ? projectRes.data.result : null;
+        const fromProject = flattenActiveFieldCopyLines(projectDoc);
+        const resultedCopies =
+          fromProject.length > 0
+            ? fromProject
+            : [
+                ...(officeRes.data.result.officeFieldCopies || []),
+                ...(officeRes.data.result.officeDraftCopies || []),
+              ];
         let compiledForms = compileMaterials(resultedCopies || []);
         compiledForms = compiledForms.map((form) => {
           form.intialReference = form.reference;
@@ -162,6 +200,7 @@ export default function EditCustomerFieldCopy() {
               form.markup = Math.round(autoMarkup * 100) / 100;
               form.markUp = form.markup;
             }
+            return recalcFgFieldCopyLineTotals(form);
           } else if (form.source === "Other") {
             if (cost > 0 && price > 0) {
               const autoMarkup = ((price - cost) / cost) * 100;
@@ -186,19 +225,19 @@ export default function EditCustomerFieldCopy() {
 
         setForms(compiledForms);
         const resultedLabors = [
-          ...response.data.result.laborData,
-          ...response.data.result.laborDraftData,
+          ...officeRes.data.result.laborData,
+          ...officeRes.data.result.laborDraftData,
         ];
         const laborData = resultedLabors.filter(
           (labor) => labor.totalPrice !== 0
         );
         setLaborData(laborData || []);
       } else {
-        toast.error(response.data.message);
+        toast.error(officeRes.data.message);
       }
     } catch (error) {
       console.error(error);
-      toast.error(error.response.message);
+      toast.error(error.response?.data?.message || error.message || "Something went wrong");
     }
   };
 
@@ -238,20 +277,30 @@ export default function EditCustomerFieldCopy() {
 
   const compileMaterials = (forms) => {
     const compiled = {};
+    let laborSeq = 0;
 
     forms.forEach((form) => {
-      const { reference, measure, quantity, price, totalPrice, type } = form;
-      // Use both reference and measure as the key
-      const key = `${reference}-${type}-${measure}-${price}`;
+      const { reference, measure, quantity, price, totalPrice, type, source } =
+        form;
+      const vendor = String(form.vendorName || form.vendor || "").trim();
 
-      if (compiled[key]) {
-        compiled[key].quantity += parseFloat(quantity);
-        compiled[key].totalPrice += parseFloat(totalPrice);
+      // Source=Labor: keep each field-copy line separate (vendor/amount must not merge away).
+      const key =
+        source === "Labor"
+          ? `Labor|${laborSeq++}|${reference}|${type}|${vendor}|${totalPrice}|${form.cost ?? ""}`
+          : `${reference}-${type}-${measure}-${price}`;
+
+      if (source !== "Labor" && compiled[key]) {
+        compiled[key].quantity += parseFloat(quantity) || 0;
+        compiled[key].totalPrice += parseFloat(totalPrice) || 0;
       } else {
         compiled[key] = {
           ...form,
-          quantity: parseFloat(quantity),
-          totalPrice: parseFloat(totalPrice),
+          quantity:
+            quantity === "" || quantity === null || quantity === undefined
+              ? quantity
+              : parseFloat(quantity),
+          totalPrice: parseFloat(totalPrice) || 0,
         };
       }
     });
@@ -575,7 +624,7 @@ export default function EditCustomerFieldCopy() {
       }
     } catch (error) {
       console.error(error);
-      toast.error(error.response.message);
+      toast.error(error.response?.data?.message || error.message || "Something went wrong");
     }
   };
 
@@ -741,6 +790,19 @@ export default function EditCustomerFieldCopy() {
 
     const updatedForm = { ...updatedForms[index], [name]: value };
 
+    if (name === "markup" || name === "markUp") {
+      if (value === "" || value === ".") {
+        updatedForm.markup = value;
+        updatedForm.markUp = value;
+      } else {
+        const mVal = parseFloat(value);
+        if (!Number.isNaN(mVal) && mVal >= 0) {
+          updatedForm.markup = mVal;
+          updatedForm.markUp = mVal;
+        }
+      }
+    }
+
     if (updatedForm.source === "F&G" && name === "cost") {
       updatedForm.cost = normalizeFgEditableUnitValue(value);
     }
@@ -754,7 +816,7 @@ export default function EditCustomerFieldCopy() {
       updatedForm[name] = normalizeLaborLumpSumEditableAmount(value);
     }
 
-    // Lump Sum: cost + markup → totalPrice; edit totalPrice → markup adjusts
+    // Lump Sum: cost + markup → totalPrice; edit totalPrice → cost adjusts
     if (updatedForm.source === "Lump Sum") {
       const cost = parseFloat(updatedForm.cost) || 0;
       updatedForm.totalCost = cost;
@@ -781,33 +843,59 @@ export default function EditCustomerFieldCopy() {
         } else {
           const tp = parseFloat(value);
           if (!Number.isNaN(tp) && tp >= 0) {
-            const c = parseFloat(updatedForm.cost) || 0;
-            if (c > 0) {
-              const markup = tp > 0 ? ((tp - c) / c) * 100 : 0;
-              updatedForm.markup = Math.round(markup * 100) / 100;
-              updatedForm.markUp = updatedForm.markup;
-            } else if (tp > 0) {
-              const markupPct =
-                parseFloat(updatedForm.markUp ?? updatedForm.markup);
+            if (tp > 0) {
+              const markupPct = parseFloat(
+                updatedForm.markUp ?? updatedForm.markup
+              );
               const useMarkup =
-                Number.isFinite(markupPct) && markupPct >= 0
-                  ? markupPct
-                  : 100;
+                Number.isFinite(markupPct) && markupPct >= 0 ? markupPct : 100;
               const derivedCost =
                 Math.round((tp / (1 + useMarkup / 100)) * 10000) / 10000;
               updatedForm.cost = derivedCost;
               updatedForm.totalCost = derivedCost;
-              updatedForm.markup = useMarkup;
-              updatedForm.markUp = useMarkup;
+            } else {
+              updatedForm.cost = "";
+              updatedForm.totalCost = "";
             }
           }
         }
       }
     } else if (updatedForm.source === "Labor") {
-      Object.assign(
-        updatedForm,
-        recalcLaborGenerateCustomerLine(updatedForm)
-      );
+      if (name === "cost") {
+        if (value === "" || value === null || value === undefined) {
+          updatedForm.cost = "";
+          updatedForm.totalCost = "";
+          updatedForm.totalPrice = "";
+        } else {
+          Object.assign(
+            updatedForm,
+            recalcLaborGenerateCustomerLine(updatedForm)
+          );
+        }
+      } else if (name === "totalPrice") {
+        if (value === "" || value === null || value === undefined) {
+          updatedForm.cost = "";
+          updatedForm.totalCost = "";
+        } else {
+          const tp = parseFloat(value);
+          if (!Number.isNaN(tp) && tp >= 0) {
+            if (tp > 0) {
+              const markupPct = parseFloat(
+                updatedForm.markUp ?? updatedForm.markup
+              );
+              const useMarkup =
+                Number.isFinite(markupPct) && markupPct >= 0 ? markupPct : 100;
+              const derivedCost =
+                Math.round((tp / (1 + useMarkup / 100)) * 10000) / 10000;
+              updatedForm.cost = derivedCost;
+              updatedForm.totalCost = derivedCost;
+            } else {
+              updatedForm.cost = "";
+              updatedForm.totalCost = "";
+            }
+          }
+        }
+      }
     }
 
     if (name === "cost" && updatedForm.source === "Other") {
@@ -848,36 +936,49 @@ export default function EditCustomerFieldCopy() {
     }
 
     if (name === "markup" || name === "markUp") {
-      const markupVal = parseFloat(updatedForm.markUp ?? updatedForm.markup) || 0;
-      updatedForm.markup = markupVal;
-      updatedForm.markUp = markupVal;
-
       if (updatedForm.source === "Other") {
-        Object.assign(
-          updatedForm,
-          recalcOtherFieldCopyLine(updatedForm, "preserve")
-        );
-      } else if (updatedForm.source === "Labor") {
-        Object.assign(
-          updatedForm,
-          recalcLaborGenerateCustomerLine(updatedForm)
-        );
-      } else if (updatedForm.source === "Lump Sum") {
-        const cost = parseFloat(updatedForm.cost) || 0;
-        updatedForm.totalCost = cost;
-        updatedForm.totalPrice =
-          cost > 0
-            ? Math.round((cost + (cost * markupVal) / 100) * 100) / 100
-            : "";
-      } else if (false) {
-        const intermediatePrice =
-          updatedForm.totalCost + (markupVal * updatedForm.totalCost) / 100;
-        updatedForm.totalPrice =
-          intermediatePrice + (adminTax * intermediatePrice) / 100;
+        if (value !== ".") {
+          Object.assign(
+            updatedForm,
+            recalcOtherFieldCopyLine(updatedForm, "markup")
+          );
+        }
       } else {
-        updatedForm.totalPrice =
-          updatedForm.totalCost +
-          (markupVal * updatedForm.totalCost) / 100;
+        if (updatedForm.source === "F&G") {
+          if (value !== ".") {
+            Object.assign(
+              updatedForm,
+              syncFgLineFromMarkupEdit(updatedForm)
+            );
+          }
+        } else {
+          const markupVal = parseFloat(updatedForm.markUp ?? updatedForm.markup) || 0;
+          updatedForm.markup = markupVal;
+          updatedForm.markUp = markupVal;
+
+          if (updatedForm.source === "Labor") {
+            Object.assign(
+              updatedForm,
+              recalcLaborGenerateCustomerLine(updatedForm)
+            );
+          } else if (updatedForm.source === "Lump Sum") {
+            const cost = parseFloat(updatedForm.cost) || 0;
+            updatedForm.totalCost = cost;
+            updatedForm.totalPrice =
+              cost > 0
+                ? Math.round((cost + (cost * markupVal) / 100) * 100) / 100
+                : "";
+          } else if (false) {
+            const intermediatePrice =
+              updatedForm.totalCost + (markupVal * updatedForm.totalCost) / 100;
+            updatedForm.totalPrice =
+              intermediatePrice + (adminTax * intermediatePrice) / 100;
+          } else {
+            updatedForm.totalPrice =
+              updatedForm.totalCost +
+              (markupVal * updatedForm.totalCost) / 100;
+          }
+        }
       }
     }
 
@@ -947,17 +1048,13 @@ export default function EditCustomerFieldCopy() {
     };
     if (updatedForms[index].source === "F&G") {
       row = ensureFgCostFromPrice(row);
-      const qty = Number.parseFloat(forms[index].quantity) || 0;
       const unitPrice = Number.parseFloat(row.price) || 0;
       const unitCost = Number.parseFloat(row.cost) || 0;
-      if (qty > 0) {
-        row.totalPrice = unitPrice > 0 ? unitPrice * qty : row.totalPrice;
-        row.totalCost = unitCost > 0 ? unitCost * qty : "";
-      }
       if (unitCost > 0 && unitPrice > 0) {
         row.markup = Math.round(((unitPrice - unitCost) / unitCost) * 10000) / 100;
         row.markUp = row.markup;
       }
+      row = recalcFgFieldCopyLineTotals(row);
     }
     updatedForms[index] = applyReferenceVendorToForm(row);
     setForms(updatedForms);
@@ -1016,7 +1113,7 @@ export default function EditCustomerFieldCopy() {
       }
     } catch (error) {
       console.error(error);
-      toast.error(error.response.message);
+      toast.error(error.response?.data?.message || error.message || "Something went wrong");
     }
   };
 
@@ -1093,7 +1190,7 @@ export default function EditCustomerFieldCopy() {
       }
     } catch (error) {
       console.error(error);
-      toast.error(error.response.message);
+      toast.error(error.response?.data?.message || error.message || "Something went wrong");
     }
   };
 
@@ -1158,7 +1255,7 @@ export default function EditCustomerFieldCopy() {
         return false;
       }
     } catch (error) {
-      toast.error(error.response.message);
+      toast.error(error.response?.data?.message || error.message || "Something went wrong");
       return false;
     } finally {
       setDisableBtn(false);
@@ -1494,6 +1591,41 @@ export default function EditCustomerFieldCopy() {
                             </div>
                           </div>
                           <div className="form-group flex flex-col">
+                            <label htmlFor={`measure-fg-${index}`}>
+                              Measure *
+                            </label>
+                            <input
+                              type="text"
+                              className="border-b border-[grey] outline-none"
+                              id={`measure-fg-${index}`}
+                              name="measure"
+                              onChange={(e) => handleInputChange(e, index)}
+                              value={formData.measure}
+                              placeholder="Enter measure"
+                              readOnly
+                              required
+                            />
+                          </div>
+                          <div className="form-group flex flex-col">
+                            <label htmlFor={`quantity-fg-${index}`}>
+                              Quantity *
+                            </label>
+                            <input
+                              type="number"
+                              className="border-b border-[grey] outline-none w-[180px]"
+                              id={`quantity-fg-${index}`}
+                              name="quantity"
+                              onChange={(e) => handleInputChange(e, index)}
+                              onWheel={(e) => e.currentTarget.blur()}
+                              value={formData.quantity}
+                              placeholder="Enter Quantity"
+                              min={0}
+                              max={10000000}
+                              step="any"
+                              required
+                            />
+                          </div>
+                          <div className="form-group flex flex-col">
                             <label htmlFor={`cost-fg-edit-${index}`}>Cost *</label>
                             <input
                               type="number"
@@ -1509,7 +1641,7 @@ export default function EditCustomerFieldCopy() {
                             />
                           </div>
                           <div className="form-group flex flex-col">
-                            <label htmlFor={`measure-${index}`}>Markup *</label>
+                            <label htmlFor={`markup-fg-edit-${index}`}>Markup *</label>
                             <input
                               type="text"
                               className="border-b border-[grey] outline-none"
@@ -1687,6 +1819,7 @@ export default function EditCustomerFieldCopy() {
                               name="cost"
                               onChange={(e) => handleInputChange(e, index)}
                               value={
+                                formData.source === "Labor" ||
                                 formData.source === "Lump Sum" ||
                                 String(formData.source || "").includes("Lump Sum")
                                   ? formData.cost === 0 || formData.cost === "0"
@@ -1851,6 +1984,7 @@ export default function EditCustomerFieldCopy() {
                               name="cost"
                               onChange={(e) => handleInputChange(e, index)}
                               value={
+                                formData.source === "Labor" ||
                                 formData.source === "Lump Sum" ||
                                 String(formData.source || "").includes("Lump Sum")
                                   ? formData.cost === 0 || formData.cost === "0"
@@ -1887,50 +2021,11 @@ export default function EditCustomerFieldCopy() {
                       {formData.source === "F&G" && (
                         <>
                           <div className="form-group flex flex-col">
-                            <label htmlFor={`measure-${index}`}>
-                              Measure *
-                            </label>
-                            <input
-                              type="text"
-                              className="border-b border-[grey] outline-none"
-                              id={`measure-${index}`}
-                              name="measure"
-                              onChange={(e) => handleInputChange(e, index)}
-                              value={formData.measure}
-                              placeholder="Enter measure"
-                              readOnly={
-                                formData.source === "Other" ? false : true
-                              }
-                              required
-                            />
-                          </div>
-
-                          <div className="form-group flex flex-col">
-                            <label htmlFor={`quantity-${index}`}>
-                              Quantity *
-                            </label>
-                            <input
-                              type="number"
-                              className="border-b border-[grey] outline-none w-[180px]"
-                              id={`quantity-${index}`}
-                              name="quantity"
-                              onChange={(e) => handleInputChange(e, index)}
-                              onWheel={(e) => e.currentTarget.blur()}
-                              value={formData.quantity}
-                              placeholder="Enter Quantity"
-                              min={0}
-                              max={10000000}
-                              step="any"
-                              required
-                            />
-                          </div>
-
-                          <div className="form-group flex flex-col">
-                            <label htmlFor={`price-${index}`}>Price *</label>
+                            <label htmlFor={`price-fg-${index}`}>Price *</label>
                             <input
                               type="number"
                               className="border-b border-[grey] outline-none"
-                              id={`price-${index}`}
+                              id={`price-fg-${index}`}
                               name="price"
                               onChange={(e) => handleInputChange(e, index)}
                               value={formData.price}
@@ -2007,16 +2102,13 @@ export default function EditCustomerFieldCopy() {
                           <div className="form-group flex flex-col">
                             <label htmlFor={`markup-${index}`}>Mark up</label>
                             <input
-                              type="number"
+                              type="text"
                               className="border-b border-[grey] outline-none w-[180px]"
                               id={`markup-${index}`}
                               name="markup"
-                              placeholder="Enter percent"
+                              placeholder="Enter markUp"
                               onChange={(e) => handleInputChange(e, index)}
-                              value={formData?.markup}
-                              min={0}
-                              max={100}
-                              required
+                              value={formData?.markup ?? formData?.markUp ?? ""}
                             />
                           </div>
                           <div className="form-group flex flex-col">
@@ -2135,7 +2227,10 @@ export default function EditCustomerFieldCopy() {
                             name="totalPrice"
                             placeholder="Enter total price"
                             value={formData.totalPrice}
-                            readOnly={formData.source === "Labor"}
+                            readOnly={
+                              formData.source !== "Labor" &&
+                              formData.source !== "Lump Sum"
+                            }
                             onChange={(e) => handleInputChange(e, index)}
                           />
                         </div>

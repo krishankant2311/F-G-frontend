@@ -24,7 +24,29 @@ export const EMPTY_OTHER_TREATMENT_ROW = {
   treatmentName: "",
   price: "",
   cost: "",
+  omitFromContractTotal: false,
 };
+
+/** True when an other treatment is excluded from contract / billing summary totals. */
+export function isOmittedFromContractTotal(ot) {
+  return Boolean(ot?.omitFromContractTotal);
+}
+
+/** Line price for an other treatment row (qty × price per tank). */
+export function otherTreatmentLinePrice(ot) {
+  const qty = Number(ot?.qty ?? ot?.quantity ?? 0);
+  const pricePerTank = Number(ot?.totalPricePerTank ?? 0);
+  if (!Number.isFinite(qty) || !Number.isFinite(pricePerTank)) return 0;
+  return Math.round((qty * pricePerTank + Number.EPSILON) * 100) / 100;
+}
+
+export function filterOtherTreatmentsForContractTotal(otherTreatments = []) {
+  return (otherTreatments || []).filter((ot) => !isOmittedFromContractTotal(ot));
+}
+
+export function filterOmittedOtherTreatments(otherTreatments = []) {
+  return (otherTreatments || []).filter((ot) => isOmittedFromContractTotal(ot));
+}
 
 /** True when other treatment should include chemical labor ($45 cost / $100 price). */
 export function isChemicalOtherTreatment(ot) {
@@ -368,24 +390,27 @@ export function formatOtherTreatmentRowsForApi(
     .flatMap((row) => {
       const uniqDates = Array.from(new Set(resolveOtherTreatmentFormDates(row)));
       const qty = toQuantity(resolveOtherTreatmentQuantity(row));
+      const omitFromContractTotal = Boolean(row.omitFromContractTotal);
+
+      const withOmit = (payload) => ({ ...payload, omitFromContractTotal });
 
       if (row.treatment === "Other") {
         return uniqDates.map((d) =>
           withOtherTreatmentDates(
-            {
+            withOmit({
               treatment: row.treatmentName.trim(),
               qty,
               status: "Scheduled",
               totalPricePerTank: Number(row.price || 0),
               totalCostPerTank: Number(row.cost || 0),
               isChemicalTreatment: isChemicalSection,
-            },
+            }),
             d
           )
         );
       }
 
-      const baseData = {
+      const baseData = withOmit({
         treatment:
           row.treatment ||
           row.materialData?.name ||
@@ -395,7 +420,7 @@ export function formatOtherTreatmentRowsForApi(
         qty,
         status: "Scheduled",
         isChemicalTreatment: isChemicalSection,
-      };
+      });
 
       if (row.materialData) {
         const pricePerTank =
@@ -642,6 +667,7 @@ function savedOtherTreatmentToFormRow(ot) {
     scheduledDates,
     price: ot.totalPricePerTank ?? "",
     cost: ot.totalCostPerTank ?? "",
+    omitFromContractTotal: Boolean(ot.omitFromContractTotal),
   };
 }
 

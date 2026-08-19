@@ -301,6 +301,7 @@ import AnnualProgramSchedule from "../pages/chemicalMaintenance/AnnualProgramSch
 import ClientReconcile from "../pages/chemicalMaintenance/ClientReconcile";
 import OtherTreatments from "../pages/chemicalMaintenance/OtherTreatments";
 import ArchivedPlans from "../pages/chemicalMaintenance/ArchivedPlans";
+import CompletedTreatments from "../pages/chemicalMaintenance/CompletedTreatments";
 import ChemicalControlList from "../pages/chemicalMaintenance/ChemicalControlList";
 
 export default function AllRoutes() {
@@ -426,6 +427,7 @@ export default function AllRoutes() {
 
           {/* Chemical Maintenance */}
           <Route path="/panel/office/chemical-maintenance/dashboard" element={<ChemicalDashboard />} />
+          <Route path="/panel/office/chemical-maintenance/completed-treatments" element={<CompletedTreatments />} />
           <Route path="/panel/office/chemical-maintenance/add-new-customer" element={<ChemicalAddNewCustomer />} />
           <Route path="/panel/office/chemical-maintenance/manage-customer" element={<ManageCustomers />} />
           <Route path="/panel/office/chemical-maintenance/archived-plans" element={<ArchivedPlans />} />

@@ -19,6 +19,24 @@ const toWholeQuantity = (val) => {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 };
 
+const getTodayDateOnly = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+const parseDateOnly = (dateStr) => {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
+  const d = new Date(`${dateStr}T12:00:00`);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+const isPastDateOnly = (dateStr, minDateStr = getTodayDateOnly()) => {
+  const d = parseDateOnly(dateStr);
+  const min = parseDateOnly(minDateStr);
+  if (!d || !min) return false;
+  return d < min;
+};
+
 const EditCustomer = ({ show, onClose, data, onSuccess, projectId, projectType, projectStatus }) => {
   const [scheduledDate, setScheduledDate] = useState("");
   const [quantity, setQuantity] = useState("");
@@ -44,8 +62,7 @@ const EditCustomer = ({ show, onClose, data, onSuccess, projectId, projectType, 
       const month = monthNames.indexOf(parts[1]);
       const year = parseInt(parts[2], 10);
       if (month === -1 || isNaN(day) || isNaN(year)) return "";
-      const date = new Date(year, month, day);
-      return date.toISOString().split("T")[0];
+      return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
     } catch (e) {
       return "";
     }
@@ -59,8 +76,22 @@ const EditCustomer = ({ show, onClose, data, onSuccess, projectId, projectType, 
 
   useEffect(() => {
     if (show && data) {
-      // Set initial values from data
-      setScheduledDate(parseDisplayDate(data.scheduledDate) || (data.scheduledDateRaw ? new Date(data.scheduledDateRaw).toISOString().split("T")[0] : ""));
+      const fromRaw = data.scheduledDateRaw
+        ? (() => {
+            const d = new Date(data.scheduledDateRaw);
+            if (Number.isNaN(d.getTime())) return "";
+            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+          })()
+        : "";
+      let initialDate =
+        parseDisplayDate(data.scheduledDate) || fromRaw || "";
+
+      // Overdue: past date block — default to today so present/future can be picked
+      if (data.status === "Overdue" && initialDate && isPastDateOnly(initialDate)) {
+        initialDate = getTodayDateOnly();
+      }
+
+      setScheduledDate(initialDate);
       setQuantity(
         data.quantity != null && data.quantity !== "" ? String(toWholeQuantity(data.quantity)) : ""
       );
@@ -82,13 +113,11 @@ const EditCustomer = ({ show, onClose, data, onSuccess, projectId, projectType, 
     if (isSubmitting || updateLockRef.current) return;
     updateLockRef.current = true;
 
-    // Validate: Scheduled date format must be valid (YYYY-MM-DD)
-    // For Completed treatments, past date is allowed; for others, date cannot be in the past
+    // Completed: past date allowed. Overdue/others: today and future only.
     if (scheduledDate) {
       const isValidFormat = /^\d{4}-\d{2}-\d{2}$/.test(scheduledDate);
-      const selectedDate = new Date(scheduledDate);
 
-      if (!isValidFormat || isNaN(selectedDate.getTime())) {
+      if (!isValidFormat || !parseDateOnly(scheduledDate)) {
         toast.error("Please select a valid Scheduled Date.", {
           toastId: DASHBOARD_EDIT_TOAST_ID,
         });
@@ -97,18 +126,12 @@ const EditCustomer = ({ show, onClose, data, onSuccess, projectId, projectType, 
       }
 
       const isCompleted = data?.status === "Completed";
-      if (!isCompleted) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        selectedDate.setHours(0, 0, 0, 0);
-
-        if (selectedDate < today) {
-          toast.error("Scheduled date cannot be in the past. Please select today's date or a future date.", {
-            toastId: DASHBOARD_EDIT_TOAST_ID,
-          });
-          updateLockRef.current = false;
-          return;
-        }
+      if (!isCompleted && isPastDateOnly(scheduledDate)) {
+        toast.error("Scheduled date cannot be in the past. Please select today's date or a future date.", {
+          toastId: DASHBOARD_EDIT_TOAST_ID,
+        });
+        updateLockRef.current = false;
+        return;
       }
     }
 
@@ -133,13 +156,9 @@ const EditCustomer = ({ show, onClose, data, onSuccess, projectId, projectType, 
     }
   };
 
-  const getTodayDate = () => {
-    const today = new Date();
-    return today.toISOString().split("T")[0];
-  };
-
-  const todayStr = getTodayDate();
-  const minDateObj = data?.status !== "Completed" ? new Date(todayStr + "T12:00:00") : null;
+  const todayStr = getTodayDateOnly();
+  const minDateObj =
+    data?.status !== "Completed" ? parseDateOnly(todayStr) : null;
 
   const getDaysInMonth = (year, month) => {
     const first = new Date(year, month, 1);
@@ -159,8 +178,8 @@ const EditCustomer = ({ show, onClose, data, onSuccess, projectId, projectType, 
     if (!day) return;
     const dateStr = `${viewDate.year}-${String(viewDate.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
     if (minDateObj) {
-      const clicked = new Date(dateStr + "T12:00:00");
-      if (clicked < minDateObj) {
+      const clicked = parseDateOnly(dateStr);
+      if (clicked && clicked < minDateObj) {
         toast.error("Scheduled date cannot be in the past.", { toastId: DASHBOARD_EDIT_TOAST_ID });
         return;
       }
@@ -256,7 +275,11 @@ const EditCustomer = ({ show, onClose, data, onSuccess, projectId, projectType, 
                       {days.map((day, idx) => {
                         const isSelected = day && selectedDay === day && selectedMonth === viewDate.month && selectedYear === viewDate.year;
                         const dateStr = day ? `${viewDate.year}-${String(viewDate.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}` : "";
-                        const isPast = day && minDateObj && new Date(dateStr + "T12:00:00") < minDateObj;
+                        const isPast =
+                          day &&
+                          minDateObj &&
+                          parseDateOnly(dateStr) &&
+                          parseDateOnly(dateStr) < minDateObj;
                         return (
                           <button
                             key={idx}
